@@ -36,7 +36,8 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
 |---|---|---|
 | `TURBO_URL` | `http://localhost:8000` | Sajtens adress utåt. Sätts till t.ex. `https://min-sajt.se` på nätet |
 | `TURBO_HOST` | `127.0.0.1` | Sätts till `0.0.0.0` på en server |
-| `TURBO_PORT` | `8000` | Porten sajten lyssnar på |
+| `TURBO_PORT` | `8000` | Porten sajten lyssnar på. Saknas den används `PORT`, som värdtjänster brukar sätta |
+| `TURBO_DB` | `turbo.db` bredvid koden | Sökväg till databasfilen, t.ex. på en disk som sparas mellan omstarter |
 
 När `TURBO_URL` inte är localhost stängs testformuläret "track a player by ID" av.
 

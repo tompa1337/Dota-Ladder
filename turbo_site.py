@@ -35,8 +35,11 @@ from turbo_rank import (FÖRVÄNTAN_VIKT, GULD_BONUS, GULD_STREAK, K, KDA_MAX, K
                         hämta_json, hämta_matcher, inga_matcher_fel, månad_för,
                         månadsgränser, tolka_id, vann, STEAM64_BAS)
 
-DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "turbo.db")
-PORT = int(os.environ.get("TURBO_PORT", "8000"))
+# TURBO_DB pekar ut databasfilen på en server (en mapp som sparas mellan omstarter).
+DB = os.environ.get("TURBO_DB") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                "turbo.db")
+# Värdtjänster anger porten i PORT; lokalt gäller 8000.
+PORT = int(os.environ.get("TURBO_PORT") or os.environ.get("PORT") or "8000")
 MIN_MATCHER = 10   # färre än så under månaden = "calibrating", hamnar sist
 PAUS = 60          # sekunder mellan uppdateringar av samma spelare (sparar API-anrop)
 # Sajtens adress utåt. Lokalt är det localhost; på nätet sätts TURBO_URL till
@@ -687,14 +690,16 @@ def sida_hem(c, månad, läge, fel=""):
         ON e.player_id=p.id WHERE e.month=? AND e.mode=? AND e.active=1""",
                         (månad, LÄGEN[läge][0])).fetchall()
     stat = [(pid, namn, spelarstat(c, pid, månad, läge)) for pid, namn in listade]
-    stat = [x for x in stat if x[2]["n"]]
-    stat.sort(key=lambda x: (x[2]["n"] >= MIN_MATCHER, x[2]["rating"]), reverse=True)
+    # Alla anmälda syns. Ordning: rankade efter MMR, sedan kalibrering, sist utan matcher.
+    stat.sort(key=lambda x: (x[2]["n"] >= MIN_MATCHER, x[2]["n"] > 0, x[2]["rating"]),
+              reverse=True)
     fråga = "" if månad == nu_månad() else f"?month={månad}"
     rader = ""
     for i, (pid, namn, s) in enumerate(stat, 1):
         rankad = s["n"] >= MIN_MATCHER
         klass = f"p{i}" if rankad and i <= 3 else ("" if rankad else "cal")
-        kal = "" if rankad else "<span class='tag'>calibrating</span>"
+        kal = ("" if rankad else "<span class='tag'>calibrating</span>" if s["n"]
+               else "<span class='tag'>no matches yet</span>")
         ikoner = "".join(hjälte_html(hj, h, med_namn=False) for h in mest_spelade(s["matcher"]))
         rader += (f"<tr class='{klass}'><td class='pos'>{i}</td>"
                   f"<td class='who'><a href='/{läge}/player/{pid}{fråga}'>{html.escape(namn)}</a>{kal}</td>"
@@ -702,8 +707,8 @@ def sida_hem(c, månad, läge, fel=""):
                   f"<td class='mmr r'>{s['rating']}</td><td class='r'>{s['n']}</td>"
                   f"<td class='r'>{s['v']}-{s['f']}</td><td class='r hide-s'>{s['wr']}%</td></tr>")
     if not rader:
-        rader = (f"<tr><td colspan=7 class='dim wide'>Nobody registered in this ladder has "
-                 f"played {lägesnamn} this month yet. Add a player below and join.</td></tr>")
+        rader = (f"<tr><td colspan=7 class='dim wide'>Nobody has registered in the "
+                 f"{lägesnamn} ladder for {månadsnamn(månad)} yet.</td></tr>")
 
     # Lokalt hjälpmedel: spelare som följs men inte valt topplistan.
     med = {pid for pid, _ in listade}
@@ -744,7 +749,7 @@ def sida_hem(c, månad, läge, fel=""):
 <table class='ladder'><tr><th>#</th><th>Player</th><th class='hide-s'>Most played</th>
 <th class='r'>MMR</th><th class='r'>Matches</th><th class='r'>W-L</th>
 <th class='r hide-s'>Win rate</th></tr>{rader}</table>
-<p class='note'>Only players registered in this ladder for the month are shown, and a
+<p class='note'>Everyone registered in this ladder for the month is shown, and a
 player can be in one ladder per month. Fewer than {MIN_MATCHER} matches counts as
 calibrating. Months change at midnight UTC.</p></div>
 {anslut}""", läge, f"/{läge}")
