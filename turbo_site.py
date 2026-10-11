@@ -36,17 +36,23 @@ from turbo_rank import (FÖRVÄNTAN_VIKT, GULD_BONUS, GULD_STREAK, K, KDA_MAX, K
                         månadsgränser, tolka_id, vann, STEAM64_BAS)
 
 # TURBO_DB pekar ut databasfilen på en server (en mapp som sparas mellan omstarter).
-DB = os.environ.get("TURBO_DB") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                "turbo.db")
+# Hos Railway läggs den automatiskt på den anslutna disken (volymen).
+_volym = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+DB = (os.environ.get("TURBO_DB") or (os.path.join(_volym, "turbo.db") if _volym else "")
+      or os.path.join(os.path.dirname(os.path.abspath(__file__)), "turbo.db"))
 # Värdtjänster anger porten i PORT; lokalt gäller 8000.
 PORT = int(os.environ.get("TURBO_PORT") or os.environ.get("PORT") or "8000")
 MIN_MATCHER = 10   # färre än så under månaden = "calibrating", hamnar sist
 PAUS = 60          # sekunder mellan uppdateringar av samma spelare (sparar API-anrop)
 # Sajtens adress utåt. Lokalt är det localhost; på nätet sätts TURBO_URL till
 # t.ex. https://min-sajt.se. Steam skickar tillbaka spelaren hit efter inloggning.
-BAS = os.environ.get("TURBO_URL", f"http://localhost:{PORT}").rstrip("/")
+# Hos Railway hämtas adressen automatiskt från den domän tjänsten har fått.
+_domän = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+BAS = (os.environ.get("TURBO_URL") or (f"https://{_domän}" if _domän else "")
+       or f"http://localhost:{PORT}").rstrip("/")
 LOKALT = urlsplit(BAS).hostname in ("localhost", "127.0.0.1")
-VÄRD = os.environ.get("TURBO_HOST", "127.0.0.1")     # 0.0.0.0 när sajten ligger på nätet
+# Lokalt nås sajten bara från den egna datorn; på nätet måste den lyssna utåt.
+VÄRD = os.environ.get("TURBO_HOST") or ("127.0.0.1" if LOKALT else "0.0.0.0")
 STEAM_OPENID = os.environ.get("TURBO_STEAM_OPENID", "https://steamcommunity.com/openid/login")
 SESSION_DAGAR = 30          # så länge gäller en inloggning
 # Automatisk uppdatering: när någon öppnar en sida hämtas nya matcher i bakgrunden
@@ -1126,14 +1132,23 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(errors="replace")
     except AttributeError:
         pass
-    with closing(db()) as c:
-        uppdatera_hjältar(c)        # hjältenamn och bilder, hämtas en gång i veckan
+    db().close()                    # skapar databasen om den saknas
+
+    def _hjältar_i_bakgrunden():    # hjältenamn och bilder, hämtas en gång i veckan
+        with closing(db()) as c:
+            uppdatera_hjältar(c)
+    # I bakgrunden, så att sajten startar direkt även om OpenDota svarar långsamt.
+    threading.Thread(target=_hjältar_i_bakgrunden, daemon=True).start()
     try:
         server = ThreadingHTTPServer((VÄRD, PORT), Handler)
     except OSError:
         sys.exit(f"Port {PORT} är upptagen. Körs sajten redan i ett annat fönster? "
                  "Stäng det och försök igen.")
     print(f"Kör på {BAS}  (Ctrl+C för att stoppa)")
+    print(f"Databas: {DB}")
+    if os.environ.get("RAILWAY_ENVIRONMENT") and not _volym and not os.environ.get("TURBO_DB"):
+        print("VARNING: ingen volym är ansluten. Spelare, anmälningar och inloggningar "
+              "försvinner vid nästa omstart. Lägg till en volym med mount path /data.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

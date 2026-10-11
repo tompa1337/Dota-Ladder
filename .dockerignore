@@ -1,0 +1,4 @@
+turbo.db
+__pycache__/
+.git/
+*.bat

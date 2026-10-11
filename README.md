@@ -34,12 +34,29 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
 
 | Variabel | Standard | Används till |
 |---|---|---|
-| `TURBO_URL` | `http://localhost:8000` | Sajtens adress utåt. Sätts till t.ex. `https://min-sajt.se` på nätet |
-| `TURBO_HOST` | `127.0.0.1` | Sätts till `0.0.0.0` på en server |
+| `TURBO_URL` | `http://localhost:8000`, eller Railways domän | Sajtens adress utåt. Behöver bara sättas för en egen domän |
+| `TURBO_HOST` | `127.0.0.1` lokalt, `0.0.0.0` på nätet | Vilket nätverkskort sajten lyssnar på |
 | `TURBO_PORT` | `8000` | Porten sajten lyssnar på. Saknas den används `PORT`, som värdtjänster brukar sätta |
-| `TURBO_DB` | `turbo.db` bredvid koden | Sökväg till databasfilen, t.ex. på en disk som sparas mellan omstarter |
+| `TURBO_DB` | `turbo.db` bredvid koden, eller på Railways volym | Sökväg till databasfilen, t.ex. på en disk som sparas mellan omstarter |
 
 När `TURBO_URL` inte är localhost stängs testformuläret "track a player by ID" av.
+
+## Lägga sajten på nätet med Railway
+
+1. Skapa ett konto på [railway.com](https://railway.com) och logga in med GitHub.
+2. **New Project → Deploy from GitHub repo** och välj `Dota-Ladder`. Railway hittar
+   `Dockerfile` och bygger sajten.
+3. **Lägg till en volym** på tjänsten med mount path `/data`. Utan den försvinner databasen
+   vid varje omstart.
+4. Under tjänstens **Settings → Networking**, välj **Generate Domain**. Frågar Railway efter
+   port, ange `8080`.
+5. Öppna adressen du fick. Sajten läser själv av adressen och volymen, så inga variabler
+   behöver sättas.
+
+Varje ändring som laddas upp till `main` på GitHub publiceras automatiskt.
+
+Egen domän: lägg till den under Networking och sätt variabeln `TURBO_URL` till
+`https://din-domän.se`, så att Steam-inloggningen skickar tillbaka spelarna dit.
 
 ## Status
 
