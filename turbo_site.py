@@ -63,6 +63,9 @@ MELLANRUM = 3               # sekunders paus mellan två spelare (OpenDota: ca 6
 DYGNSBUDGET = 1500          # högst så många anrop per dygn i bakgrunden (gratisgräns 2000)
 ANROP_PER_SPELARE = 3       # två spellägen + profilen
 VILA_EFTER_FEL = 5 * 60     # paus i bakgrundsuppdateringen efter ett fel från OpenDota
+# Bestämd första guldhjälte för en viss spelare en viss månad: (Steam32-ID, månad) -> hjälte-id.
+# Resten av ordningen är slumpad som vanligt. 32 = Riki.
+FÖRSTA_GULDHJÄLTE = {(168893053, "2026-10"): 32}
 SAJTNAMN = "Ranked Ladders"
 # Spellägen: adressdel -> (OpenDotas game_mode, namn, kort beskrivning på menyn)
 LÄGEN = {"turbo": (TURBO, "Turbo", "Fast games, quick gold and experience."),
@@ -456,14 +459,22 @@ def guldordning(c, pid, månad):
     rad = c.execute("SELECT heroes FROM gold_order WHERE player_id=? AND month=?",
                     (pid, månad)).fetchone()
     if rad:
-        return json.loads(rad[0])
-    ordning = [r[0] for r in c.execute("SELECT id FROM heroes ORDER BY id")]
-    if not ordning:
-        return []
-    random.Random().shuffle(ordning)
-    c.execute("INSERT OR IGNORE INTO gold_order VALUES(?,?,?)",
-              (pid, månad, json.dumps(ordning)))
-    c.commit()
+        ordning = json.loads(rad[0])
+    else:
+        ordning = [r[0] for r in c.execute("SELECT id FROM heroes ORDER BY id")]
+        if not ordning:
+            return []
+        random.Random().shuffle(ordning)
+    # En bestämd första guldhjälte flyttas längst fram, även i en redan sparad ordning.
+    först = FÖRSTA_GULDHJÄLTE.get((pid, månad))
+    ändrad = bool(först in ordning and ordning[0] != först)
+    if ändrad:
+        ordning.remove(först)
+        ordning.insert(0, först)
+    if ändrad or not rad:
+        c.execute("INSERT OR REPLACE INTO gold_order VALUES(?,?,?)",
+                  (pid, månad, json.dumps(ordning)))
+        c.commit()
     return ordning
 
 
