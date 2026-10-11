@@ -36,6 +36,7 @@ KDA_MAX = 0.50      # K/D/A kan som mest ändra en matchs poäng med 50 %
 MOTSTÅND_MAX = 400   # motståndarnivån flyttas högst så här långt från START
 GULD_BONUS = 10      # extra MMR för vinst med guldhjälten (bara Turbo)
 GULD_STREAK = 0.1    # varje guldvinst i rad höjer bonusen med 10 % av GULD_BONUS
+GULD_MAX = 20        # bonusen blir aldrig högre än så (nås vid 11 guldvinster i rad)
 MEDALJER = ["Herald", "Guardian", "Crusader", "Archon", "Legend", "Ancient", "Divine",
             "Immortal"]
 STEAM64_BAS = 76561197960265728
@@ -224,8 +225,8 @@ def förklara(rating, vinst, kills=None, deaths=None, assists=None, motståndare
 
 
 def guldbonus(streak):
-    """Extra MMR för guldvinst nummer `streak` i rad: 10, 11, 12 ..."""
-    return GULD_BONUS * (1 + GULD_STREAK * (streak - 1))
+    """Extra MMR för guldvinst nummer `streak` i rad: 10, 11, 12 ... högst GULD_MAX."""
+    return min(GULD_MAX, GULD_BONUS * (1 + GULD_STREAK * (streak - 1)))
 
 
 def poängändring(rating, vinst, kills=None, deaths=None, assists=None, motståndare=None):

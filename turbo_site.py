@@ -30,7 +30,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
-from turbo_rank import (FÖRVÄNTAN_VIKT, GULD_BONUS, GULD_STREAK, K, KDA_MAX, KDA_NORMAL, SINGLE_DRAFT,
+from turbo_rank import (FÖRVÄNTAN_VIKT, GULD_BONUS, GULD_MAX, GULD_STREAK, K, KDA_MAX, KDA_NORMAL, SINGLE_DRAFT,
                         START, TURBO, guldbonus, hämta_profil, motståndarnivå, rank_namn, ApiFel, förklara, giltig,
                         hämta_json, hämta_matcher, inga_matcher_fel, månad_för,
                         månadsgränser, tolka_id, vann, STEAM64_BAS)
@@ -612,7 +612,7 @@ background:#0b1218}
 .stats div{display:flex;flex-direction:column}
 .stats b{font-family:"Barlow Condensed",sans-serif;font-size:40px;line-height:1;font-weight:700;
 font-variant-numeric:tabular-nums}
-.stats .lead b{color:var(--gold)}
+.stats .lead b,.stats .goldstat b{color:var(--gold)}
 .stats span{color:var(--dim);font-size:13px;margin-top:3px}
 input,button{font:inherit;padding:9px 13px;border-radius:4px;border:1px solid var(--line);
 background:#0c141b;color:inherit}
@@ -891,18 +891,28 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
     else:
         uppdatera = (f"<p class='note'>Last updated {tid}. New matches are fetched "
                      f"automatically when someone opens the page.</p>")
+    # Vinster i rad: räknas bakifrån bland månadens matcher i den här stegen.
+    vinstsvit = 0
+    for m in reversed(ms):
+        if not m["win"]:
+            break
+        vinstsvit += 1
+    sviter = (f"<div><b>{vinstsvit}</b><span>win streak</span></div>")
     guldkort = ""
-    if läge == "turbo" and månad == nu_månad():
+    if läge == "turbo":
         _, guldhjälte, svit = spela_månad(c, pid, månad, läge)
-        if guldhjälte is not None:
+        if guldhjälte is not None:      # guldsviten visas bara där guldhjältar finns
+            sviter += (f"<div class='goldstat'><b>{svit}</b><span>gold hero streak</span>"
+                       f"</div>")
+        if guldhjälte is not None and månad == nu_månad():
             nästa = guldbonus(svit + 1)
-            svittext = (f"Gold win streak: {svit}. " if svit else "")
+            svittext = (f"Gold hero streak: {svit}. " if svit else "")
             guldkort = (f"<div class='card gold'><h2>Gold hero</h2><div class='row'>"
                         f"{hjälte_html(hj, guldhjälte)}</div><p class='note'>Win a Turbo "
                         f"match with this hero for <b>+{en(nästa)} MMR</b> on top of the "
                         f"normal change. {svittext}Each gold win in a row raises the bonus "
-                        f"by {en(GULD_BONUS * GULD_STREAK, 0)}; a loss on your gold hero "
-                        f"resets it. After a win you get a new random gold hero.</p></div>")
+                        f"by {en(GULD_BONUS * GULD_STREAK, 0)}, up to +{GULD_MAX}; a loss on your gold "
+                        f"hero resets it. After a win you get a new random gold hero.</p></div>")
     favoriter = "".join(hjälte_html(hj, h, med_namn=False) for h in mest_spelade(ms, 5))
     return sida(f"{namn} in {lägesnamn}", f"""
 <a class='back' href='/{läge}{fråga}'>Back to the {lägesnamn} leaderboard</a>
@@ -912,6 +922,7 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
 <div><b>{s['n']}</b><span>matches</span></div>
 <div><b>{s['v']}-{s['f']}</b><span>wins and losses</span></div>
 <div><b>{s['wr']}%</b><span>win rate</span></div>
+{sviter}
 <div class='heroes'><b style='font-size:0;line-height:40px'>{favoriter or "&nbsp;"}</b>
 <span>most played</span></div></div>
 <div class='card'>{kurva}
@@ -994,6 +1005,8 @@ def sida_match(c, pid, mid, läge):
                      f"half the score of an average match."))
     if e["bonus"]:
         hur = ("First gold win in a row." if e["streak"] == 1 else
+               f"Gold win number {e['streak']} in a row, capped at the maximum +{GULD_MAX}."
+               if e["bonus"] >= GULD_MAX else
                f"Gold win number {e['streak']} in a row: {GULD_BONUS} × "
                f"{en(1 + GULD_STREAK * (e['streak'] - 1))}.")
         steg.append(("Gold hero bonus", f"+{en(e['bonus'])}",
