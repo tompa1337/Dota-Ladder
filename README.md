@@ -15,7 +15,7 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
 - **Två stegar** med egen topplista, profil och MMR. En spelare kan vara med i båda.
 - **Ny säsong varje månad:** alla börjar om på 1500 MMR den 1:a (UTC).
 - **MMR** utgår från vinst eller förlust (omkring 12 per match) och justeras lite för
-  förväntad vinstchans (motståndets nivå och egen MMR, dämpad till en tiondel) och för K/D/A: `(kills + assists / 3) / deaths`, högst ±30 %.
+  förväntad vinstchans (motståndets nivå och egen MMR, dämpad till en tiondel) och för K/D/A: `(kills + assists / 3) / deaths`, högst ±50 %.
 - **Guldhjälte (Turbo):** varje spelare har en slumpad hjälteordning per månad. Vinst med
   guldhjälten ger +10 MMR, och varje guldvinst i rad höjer bonusen med 1.
 - **Inloggning med Steam:** spelaren loggar in på Steams egen sida. Sajten ser aldrig

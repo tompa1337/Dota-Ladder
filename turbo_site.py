@@ -66,6 +66,13 @@ VILA_EFTER_FEL = 5 * 60     # paus i bakgrundsuppdateringen efter ett fel från 
 # Bestämd första guldhjälte för en viss spelare en viss månad: (Steam32-ID, månad) -> hjälte-id.
 # Resten av ordningen är slumpad som vanligt. 32 = Riki.
 FÖRSTA_GULDHJÄLTE = {(168893053, "2026-10"): 32}
+# Första pris som visas på topplistorna. Bilden är en kista från Dota 2 och hämtas
+# från Steams bildserver. Byt text eller bild här.
+PRIS_TEXT = "A Dota 2 treasure chest"
+PRIS_BILD = ("https://community.cloudflare.steamstatic.com/economy/image/"
+             "i0CoZ81Ui0m-9KwlBY1L_18myuGuq1wfhWSaZgMttydbPaERSR0Wqmu7LAoc"
+             "GJG51EejH-LGxsuyIGmS2llzy4Px613YUxjylZnu9CxcoaX8PadodKSQXT6U"
+             "mLsi4uM5TXjlkR9ytm3Xmdz6di_CPAIjW5t5TO4U8k7vczduM-k/256fx256f")
 SAJTNAMN = "Ranked Ladders"
 # Spellägen: adressdel -> (OpenDotas game_mode, namn, kort beskrivning på menyn)
 LÄGEN = {"turbo": (TURBO, "Turbo", "Fast games, quick gold and experience."),
@@ -628,6 +635,12 @@ var(--panel) 55%)}
 padding:1px 6px;margin-left:10px;vertical-align:middle}
 .live{margin:-8px 0 18px;padding:8px 12px;border:1px solid var(--line);border-radius:4px;
 color:var(--dim);font-size:14px}
+.prize{display:flex;align-items:center;gap:20px;margin:16px 0;padding:14px 18px;
+border:1px solid var(--gold);border-radius:6px;
+background:linear-gradient(100deg,rgba(229,180,80,.18),var(--panel) 60%)}
+.prize img{width:96px;height:96px;object-fit:contain;flex:none}
+.prize h2{color:var(--gold);margin:0} .prize .what{margin:2px 0 0;font-size:19px;font-weight:600}
+.prize .note{margin-top:6px}
 .note{color:var(--dim);font-size:14px;margin:12px 0 0;max-width:70ch}
 svg.curve{width:100%;height:auto;display:block}
 @media(max-width:560px){h1{font-size:34px}.ladder .mmr{font-size:26px}.hide-s{display:none}
@@ -762,9 +775,21 @@ def sida_hem(c, månad, läge, fel=""):
                    f"without registering them in a ladder; only the player can do that, "
                    f"signed in.</p>{övriga_html}</div>")
 
+    ledare = (f"Right now that is <b>{html.escape(stat[0][1])}</b>."
+              if stat and stat[0][2]["n"] >= MIN_MATCHER else
+              f"Nobody is ranked yet: it takes {MIN_MATCHER} matches this month.")
+    pris = (f"<div class='prize'><img src='{PRIS_BILD}' alt='' width='96' height='96' "
+            f"onerror=\"this.style.display='none'\"><div><h2>1st prize</h2>"
+            f"<p class='what'>{html.escape(PRIS_TEXT)}</p><p class='note'>"
+            + (f"Whoever is first on the {lägesnamn} ladder when {månadsnamn(månad)} ends "
+               f"wins it. {ledare}" if månad == nu_månad() else
+               f"It went to whoever finished first on the {lägesnamn} ladder in "
+               f"{månadsnamn(månad)}.") + "</p></div></div>")
+
     return sida(f"{lägesnamn} leaderboard", f"""
 <h1>{lägesnamn} leaderboard</h1>
 {månadsväljare(månad, f'/{läge}')}
+{pris}
 <div class='card wrap'>
 <table class='ladder'><tr><th>#</th><th>Player</th><th class='hide-s'>Most played</th>
 <th class='r'>MMR</th><th class='r'>Matches</th><th class='r'>W-L</th>
