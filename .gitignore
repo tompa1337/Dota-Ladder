@@ -1,0 +1,5 @@
+# Databasen innehåller spelardata och inloggningar och ska inte ligga på GitHub
+turbo.db
+turbo.db-journal
+__pycache__/
+*.pyc
