@@ -8,7 +8,7 @@ Ligger i samma mapp som turbo_rank.py (den återanvänds för API-anropen).
 Bara standardbibliotek. Data sparas i turbo.db (SQLite) bredvid filen.
 
 Säsonger: varje kalendermånad (UTC) är en egen säsong där alla börjar om på 1500.
-Topplistan visar bara spelare som anmält sig, och man får vara med i en stege per månad.
+Topplistorna visar bara spelare som anmält sig. Man får vara med i båda stegarna.
 Texten på sajten är på engelska, kommentarerna i koden på svenska.
 """
 import calendar
@@ -136,11 +136,23 @@ def db():
     # sessions = inloggningar. Bara en hash av kakans värde sparas, aldrig värdet självt.
     c.execute("CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, "
               "player_id INTEGER, expires INTEGER)")
-    # entries = anmälningar: en spelare får vara med i EN stege per månad.
-    # active = 0 betyder att spelaren lämnat topplistan men valet för månaden står kvar.
+    # entries = anmälningar: en rad per spelare, månad och stege.
+    # active = 0 betyder att spelaren har lämnat den stegens topplista.
     c.execute("CREATE TABLE IF NOT EXISTS entries(player_id INTEGER, month TEXT, "
               "mode INTEGER, active INTEGER NOT NULL DEFAULT 1, "
-              "PRIMARY KEY(player_id, month))")
+              "PRIMARY KEY(player_id, month, mode))")
+    # Äldre databaser tillät bara en stege per månad. Bygg om tabellen så att
+    # samma spelare kan vara anmäld till båda, och behåll alla anmälningar.
+    if sum(1 for r in c.execute("PRAGMA table_info(entries)") if r[5]) < 3:
+        c.executescript("""
+            BEGIN;
+            CREATE TABLE entries_ny(player_id INTEGER, month TEXT, mode INTEGER,
+                active INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(player_id, month, mode));
+            INSERT OR IGNORE INTO entries_ny SELECT player_id,month,mode,active FROM entries;
+            DROP TABLE entries;
+            ALTER TABLE entries_ny RENAME TO entries;
+            COMMIT;
+        """)
     # listed användes förr (en topplista för alla lägen) och läses inte längre.
     # listed = 1 när spelaren har valt att synas på topplistan.
     # Äldre databaser saknar kolumnen, så den läggs till vid behov.
@@ -192,35 +204,26 @@ def lägesnyckel(game_mode):
     return next(k for k, v in LÄGEN.items() if v[0] == game_mode)
 
 
-def anmälan(c, pid, månad):
-    """(läge, aktiv) för spelarens anmälan den månaden, eller None."""
-    rad = c.execute("SELECT mode,active FROM entries WHERE player_id=? AND month=?",
-                    (pid, månad)).fetchone()
-    return (lägesnyckel(rad[0]), bool(rad[1])) if rad else None
-
-
-def nästa_månad_text():
-    return f"{MÅNADER[int(granne(nu_månad(), 1)[5:7]) - 1]} 1"
+def anmälan(c, pid, månad, läge):
+    """True om spelaren är anmäld till stegen den månaden, False om hen har lämnat
+    den, None om hen aldrig anmält sig."""
+    rad = c.execute("SELECT active FROM entries WHERE player_id=? AND month=? AND mode=?",
+                    (pid, månad, LÄGEN[läge][0])).fetchone()
+    return bool(rad[0]) if rad else None
 
 
 def anmäl(c, pid, läge):
-    """Anmäler spelaren till stegen för innevarande månad.
-    Kastar ApiFel om spelaren redan valt den andra stegen den här månaden."""
-    månad = nu_månad()
-    nu = anmälan(c, pid, månad)
-    if nu and nu[0] != läge:
-        raise ApiFel(f"This player is already registered in the {LÄGEN[nu[0]][1]} ladder for "
-                     f"{månadsnamn(månad)}. You can only be in one ladder per month, so "
-                     f"{LÄGEN[läge][1]} opens again on {nästa_månad_text()}.")
+    """Anmäler spelaren till stegen för innevarande månad."""
     c.execute("INSERT INTO entries(player_id,month,mode,active) VALUES(?,?,?,1) "
-              "ON CONFLICT(player_id,month) DO UPDATE SET active=1",
-              (pid, månad, LÄGEN[läge][0]))
+              "ON CONFLICT(player_id,month,mode) DO UPDATE SET active=1",
+              (pid, nu_månad(), LÄGEN[läge][0]))
     c.commit()
 
 
-def lämna(c, pid):
-    """Tar bort spelaren från månadens topplista. Valet av stege står kvar månaden ut."""
-    c.execute("UPDATE entries SET active=0 WHERE player_id=? AND month=?", (pid, nu_månad()))
+def lämna(c, pid, läge):
+    """Tar bort spelaren från den stegens topplista den här månaden."""
+    c.execute("UPDATE entries SET active=0 WHERE player_id=? AND month=? AND mode=?",
+              (pid, nu_månad(), LÄGEN[läge][0]))
     c.commit()
 
 
@@ -431,7 +434,7 @@ def anmälda(c, läge=None):
             "SELECT player_id FROM entries WHERE month=? AND mode=? AND active=1",
             (nu_månad(), LÄGEN[läge][0]))]
     return [r[0] for r in c.execute(
-        "SELECT player_id FROM entries WHERE month=? AND active=1", (nu_månad(),))]
+        "SELECT DISTINCT player_id FROM entries WHERE month=? AND active=1", (nu_månad(),))]
 
 
 def med_status(sidan):
@@ -662,7 +665,7 @@ def sida_meny(c):
     return sida(SAJTNAMN, f"""
 <h1>Choose a ladder</h1>
 <p class='sub'>Monthly Dota 2 ladders. Everyone starts at {START} MMR on the 1st of every
-month, and you can be in one ladder per month.</p>
+month, and you can join both ladders.</p>
 <div class='tiles'>{knappar}</div>""")
 
 
@@ -737,7 +740,7 @@ def sida_hem(c, månad, läge, fel=""):
                   f"</a></p>{ruta(fel, 'err')}<p class='note'>You sign in on Steam's own "
                   f"site. This site never sees your password and only learns your Steam ID. "
                   f"Turn on \"Expose Public Match Data\" in Dota first, then join the ladder "
-                  f"from your profile. One ladder per month.</p></div>")
+                  f"from your profile. You can join both ladders.</p></div>")
     if LOKALT:      # bara när sajten körs på den egna datorn: lägg till vem som helst för test
         anslut += (f"<div class='card'><h2>Local testing: track a player by ID</h2>"
                    f"<form class='row' method='post' action='/{läge}/add'>"
@@ -755,8 +758,7 @@ def sida_hem(c, månad, läge, fel=""):
 <table class='ladder'><tr><th>#</th><th>Player</th><th class='hide-s'>Most played</th>
 <th class='r'>MMR</th><th class='r'>Matches</th><th class='r'>W-L</th>
 <th class='r hide-s'>Win rate</th></tr>{rader}</table>
-<p class='note'>Everyone registered in this ladder for the month is shown, and a
-player can be in one ladder per month. Fewer than {MIN_MATCHER} matches counts as
+<p class='note'>Everyone registered in this ladder for the month is shown. Fewer than {MIN_MATCHER} matches counts as
 calibrating. Months change at midnight UTC.</p></div>
 {anslut}""", läge, f"/{läge}")
 
@@ -817,33 +819,32 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
 
     tid = time.strftime("%Y-%m-%d %H:%M", time.localtime(uppdaterad)) if uppdaterad else "never"
     # Anmälan gäller alltid innevarande månad, även när en äldre månad visas.
-    nu = anmälan(c, pid, nu_månad())
+    nu = anmälan(c, pid, nu_månad(), läge)
     denna = månadsnamn(nu_månad())
+    annat = next(k for k in LÄGEN if k != läge)
+    även = (f" Also in the <a href='/{annat}/player/{pid}'>{LÄGEN[annat][1]}</a> ladder."
+            if anmälan(c, pid, nu_månad(), annat) else "")
     post = f"<form class='row' method='post' action='/{läge}/list/{pid}'>"
-    if nu and nu[0] != läge:
-        lista = (f"<span class='dim'>Registered in the <a href='/{nu[0]}/player/{pid}'>"
-                 f"{LÄGEN[nu[0]][1]}</a> ladder for {denna}. One ladder per month, so "
-                 f"{lägesnamn} opens again on {nästa_månad_text()}.</span>")
-    elif nu and nu[1]:
+    if nu:
         lista = (f"{post}<input type='hidden' name='listed' value='0'><span class='ok'>"
-                 f"Registered in the {lägesnamn} ladder for {denna}.</span> "
+                 f"Registered in the {lägesnamn} ladder for {denna}.{även}</span> "
                  f"<button class='quiet'>Leave leaderboard</button></form>")
-    elif nu:
+    elif nu is False:
         lista = (f"{post}<input type='hidden' name='listed' value='1'><span class='dim'>"
-                 f"You left the {lägesnamn} leaderboard for {denna}. Your ladder choice "
-                 f"stays locked this month.</span> <button>Rejoin</button></form>")
+                 f"You left the {lägesnamn} leaderboard for {denna}.{även}</span> "
+                 f"<button>Rejoin</button></form>")
     else:
         lista = (f"{post}<input type='hidden' name='listed' value='1'><span class='dim'>"
-                 f"Not registered in a ladder for {denna}. Joining {lägesnamn} locks you "
-                 f"out of the other ladder until {nästa_månad_text()}.</span> "
+                 f"Not registered in the {lägesnamn} ladder for {denna}.{även}</span> "
                  f"<button>Join the {lägesnamn} ladder</button></form>")
     min_sida = inloggad() == pid
     if not min_sida:        # andra ser bara läget, inga knappar
-        if nu and nu[1]:
-            lista = (f"<span class='ok'>Registered in the {LÄGEN[nu[0]][1]} ladder for "
-                     f"{denna}.</span>")
+        if nu:
+            lista = (f"<span class='ok'>Registered in the {lägesnamn} ladder for "
+                     f"{denna}.{även}</span>")
         else:
-            lista = (f"<span class='dim'>Not on a leaderboard for {denna}. Is this you? "
+            lista = (f"<span class='dim'>Not in the {lägesnamn} ladder for {denna}.{även} "
+                     f"Is this you? "
                      f"<a href='/login?next=/{läge}/player/{pid}'>Sign in through Steam</a> "
                      f"to join.</span>")
     if min_sida:
@@ -1116,13 +1117,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._redirect(f"/{läge}/player/{pid}?new={nya}")
                 if c.execute("SELECT 1 FROM players WHERE id=?", (pid,)).fetchone():
                     if vill_listas:
-                        try:
-                            anmäl(c, pid, läge)
-                        except ApiFel as e:
-                            return self._skicka(200, sida_spelare(c, pid, nu_månad(), läge,
-                                                                  fel=str(e)))
+                        anmäl(c, pid, läge)
                     else:
-                        lämna(c, pid)
+                        lämna(c, pid, läge)
                     return self._redirect(f"/{läge}/player/{pid}")
         self._404()
 

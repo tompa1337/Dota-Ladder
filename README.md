@@ -12,7 +12,7 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
 
 ## Så fungerar det
 
-- **Två stegar** med egen topplista, profil och MMR. En spelare får vara med i en stege per månad.
+- **Två stegar** med egen topplista, profil och MMR. En spelare kan vara med i båda.
 - **Ny säsong varje månad:** alla börjar om på 1500 MMR den 1:a (UTC).
 - **MMR** utgår från vinst eller förlust (omkring 12 per match) och justeras lite för
   förväntad vinstchans (motståndets nivå och egen MMR, dämpad till en tiondel) och för K/D/A: `(kills + assists / 3) / deaths`, högst ±30 %.
