@@ -18,6 +18,8 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
   förväntad vinstchans (motståndets nivå och egen MMR, dämpad till en tiondel) och för K/D/A: `(kills + assists / 3) / deaths`, högst ±50 %.
 - **Guldhjälte (Turbo):** varje spelare har en slumpad hjälteordning per månad. Vinst med
   guldhjälten ger +10 MMR, och varje guldvinst i rad höjer bonusen med 1, upp till högst +20.
+  Spelaren kan välja om sin guldhjälte: man börjar månaden med ett omval och får ett nytt efter
+  2 förluster med guldhjälten eller 5 Turbo-matcher med samma guldhjälte. Högst ett omval åt gången.
 - **Inloggning med Steam:** spelaren loggar in på Steams egen sida. Sajten ser aldrig
   lösenordet. Bara inloggad spelare kan anmäla sig själv till en stege.
 - **Automatisk uppdatering:** nya matcher hämtas i bakgrunden när någon öppnar en sida.

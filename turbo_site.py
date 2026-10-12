@@ -66,6 +66,12 @@ VILA_EFTER_FEL = 5 * 60     # paus i bakgrundsuppdateringen efter ett fel från 
 # Bestämd första guldhjälte för en viss spelare en viss månad: (Steam32-ID, månad) -> hjälte-id.
 # Resten av ordningen är slumpad som vanligt. 32 = Riki.
 FÖRSTA_GULDHJÄLTE = {(168893053, "2026-10"): 32}
+# Omval av guldhjälten (Turbo). Man börjar månaden med ett omval och kan aldrig ha fler än
+# OMVAL_MAX. Ett nytt omval fås efter OMVAL_FÖRLUSTER förluster med guldhjälten, eller efter
+# OMVAL_MATCHER Turbo-matcher medan samma hjälte är guldhjälte.
+OMVAL_MAX = 1
+OMVAL_FÖRLUSTER = 2
+OMVAL_MATCHER = 5
 # Första pris som visas på topplistorna. Bilden är en kista från Dota 2 och hämtas
 # från Steams bildserver. Byt text eller bild här.
 PRIS_TEXT = "A Dota 2 treasure chest"
@@ -143,6 +149,9 @@ def db():
     # gold_order = spelarens slumpade hjälteordning för månaden (Turbo), som JSON-lista.
     c.execute("CREATE TABLE IF NOT EXISTS gold_order(player_id INTEGER, month TEXT, "
               "heroes TEXT, PRIMARY KEY(player_id, month))")
+    # gold_repick = när spelaren valde om sin guldhjälte (Turbo), en rad per omval.
+    c.execute("CREATE TABLE IF NOT EXISTS gold_repick(player_id INTEGER, month TEXT, "
+              "time INTEGER)")
     # sessions = inloggningar. Bara en hash av kakans värde sparas, aldrig värdet självt.
     c.execute("CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, "
               "player_id INTEGER, expires INTEGER)")
@@ -487,7 +496,9 @@ def guldordning(c, pid, månad):
 
 def spela_månad(c, pid, månad, läge):
     """Räknar igenom spelarens matcher i spelläget under månaden, äldsta först.
-    Returnerar (matcher med MMR före/efter, nuvarande guldhjälte, guldvinster i rad)."""
+    Returnerar (matcher med MMR före/efter, nuvarande guldhjälte, guldvinster i rad,
+    omval: {"kvar": omval att använda, "förluster"/"spelade": räknat för nuvarande guldhjälte}).
+    Omval läggs in i tidsordning mellan matcherna. Ett omval utan omval kvar hoppas över."""
     start, slut = månadsgränser(månad)
     rader = c.execute("""SELECT match_id,start_time,win,hero_id,kills,deaths,assists,avg_rank
         FROM matches WHERE player_id=? AND mode=? AND start_time>=? AND start_time<?
@@ -495,9 +506,23 @@ def spela_månad(c, pid, månad, läge):
     egen = c.execute("SELECT rank_tier FROM players WHERE id=?", (pid,)).fetchone()
     egen = egen[0] if egen else None
     ordning = guldordning(c, pid, månad) if läge == "turbo" else []
+    byten = [t for (t,) in c.execute("SELECT time FROM gold_repick WHERE player_id=? AND "
+                                     "month=? ORDER BY time", (pid, månad))] if ordning else []
     nr, streak = 0, 0                       # plats i hjälteordningen, guldvinster i rad
+    omval = {"kvar": OMVAL_MAX, "förluster": 0, "spelade": 0}
+
+    def välj_om(till):
+        """Använder omval som gjordes före tiden `till`: nästa hjälte i ordningen blir guld."""
+        nonlocal nr
+        while byten and byten[0] <= till:
+            byten.pop(0)
+            if omval["kvar"]:
+                nr += 1
+                omval.update(kvar=omval["kvar"] - 1, förluster=0, spelade=0)
+
     r, ut = START, []                       # varje månad börjar om på START
     for m, t, w, hero, k, d, a, lobby in rader:
+        välj_om(t)
         e = förklara(r, w, k, d, a, motståndarnivå(lobby, egen))
         e.update(lobby=lobby, egen=egen, guld=None, bonus=0.0, streak=0)
         if ordning and hero == ordning[nr % len(ordning)]:
@@ -508,12 +533,20 @@ def spela_månad(c, pid, månad, läge):
                 e["ändring"] += e["bonus"]
                 e["efter"] += e["bonus"]
                 nr += 1
+                omval.update(förluster=0, spelade=0)
             else:                           # förlust med guldhjälten bryter sviten
                 streak = 0
+                omval["förluster"] += 1
+        if ordning and not (e["guld"] is not None and w):
+            omval["spelade"] += 1           # ännu en match med samma guldhjälte
+            if ((e["guld"] is not None and omval["förluster"] % OMVAL_FÖRLUSTER == 0)
+                    or omval["spelade"] % OMVAL_MATCHER == 0):
+                omval["kvar"] = min(OMVAL_MAX, omval["kvar"] + 1)
         ut.append({"id": m, "tid": t, "win": w, "hero": hero, "k": k, "d": d, "a": a,
                    "e": e})
         r = e["efter"]
-    return ut, (ordning[nr % len(ordning)] if ordning else None), streak
+    välj_om(float("inf"))                   # omval efter månadens senaste match
+    return ut, (ordning[nr % len(ordning)] if ordning else None), streak, omval
 
 
 def månadens_matcher(c, pid, månad, läge):
@@ -900,7 +933,7 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
     sviter = (f"<div><b>{vinstsvit}</b><span>win streak</span></div>")
     guldkort = ""
     if läge == "turbo":
-        _, guldhjälte, svit = spela_månad(c, pid, månad, läge)
+        _, guldhjälte, svit, omval = spela_månad(c, pid, månad, läge)
         if guldhjälte is not None:      # guldsviten visas bara där guldhjältar finns
             sviter += (f"<div class='goldstat'><b>{svit}</b><span>gold hero streak</span>"
                        f"</div>")
@@ -912,7 +945,8 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
                         f"match with this hero for <b>+{en(nästa)} MMR</b> on top of the "
                         f"normal change. {svittext}Each gold win in a row raises the bonus "
                         f"by {en(GULD_BONUS * GULD_STREAK, 0)}, up to +{GULD_MAX}; a loss on your gold "
-                        f"hero resets it. After a win you get a new random gold hero.</p></div>")
+                        f"hero resets it. After a win you get a new random gold hero.</p>"
+                        f"{omval_html(pid, omval, min_sida)}</div>")
     favoriter = "".join(hjälte_html(hj, h, med_namn=False) for h in mest_spelade(ms, 5))
     return sida(f"{namn} in {lägesnamn}", f"""
 <a class='back' href='/{läge}{fråga}'>Back to the {lägesnamn} leaderboard</a>
@@ -939,6 +973,33 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
 <th class='r'>W-L</th><th class='r'>Win rate</th></tr>
 {säsongsrader or "<tr><td colspan=5 class='dim'>No seasons played yet.</td></tr>"}
 </table></div>""", läge, f"/{läge}/player/{pid}")
+
+
+def omval_html(pid, omval, min_sida):
+    """Raden om omval av guldhjälten, med knapp för spelaren själv."""
+    if omval["kvar"]:
+        text = "You have a repick: swap this gold hero for the next random one."
+        if min_sida:
+            return (f"<form class='row' method='post' action='/turbo/repick/{pid}' "
+                    f"style='margin-top:14px'><button>Repick gold hero</button>"
+                    f"<span class='dim'>{text}</span></form>")
+        return f"<p class='note'>{text}</p>"
+    förluster = OMVAL_FÖRLUSTER - omval["förluster"] % OMVAL_FÖRLUSTER
+    matcher = OMVAL_MATCHER - omval["spelade"] % OMVAL_MATCHER
+    return (f"<p class='note'>No repick left. You get one after {förluster} more "
+            f"loss{'es' if förluster != 1 else ''} with this gold hero, or after {matcher} more "
+            f"Turbo match{'es' if matcher != 1 else ''} while it stays your gold hero. "
+            f"You can hold at most {OMVAL_MAX}.</p>")
+
+
+def välj_om_guld(c, pid):
+    """Byter spelarens guldhjälte om ett omval finns kvar. Returnerar True om det gick."""
+    _, guldhjälte, _, omval = spela_månad(c, pid, nu_månad(), "turbo")
+    if guldhjälte is None or not omval["kvar"]:
+        return False
+    c.execute("INSERT INTO gold_repick VALUES(?,?,?)", (pid, nu_månad(), int(time.time())))
+    c.commit()
+    return True
 
 
 def sida_match(c, pid, mid, läge):
@@ -1151,7 +1212,7 @@ class Handler(BaseHTTPRequestHandler):
                 except ApiFel as e:
                     return self._skicka(200, sida_hem(c, nu_månad(), läge, str(e)))
                 return self._redirect(f"/{läge}/player/{pid}?new={nya}")
-            if len(rest) == 2 and rest[1].isdigit() and rest[0] in ("refresh", "list"):
+            if len(rest) == 2 and rest[1].isdigit() and rest[0] in ("refresh", "list", "repick"):
                 pid = int(rest[1])
                 if inloggad() != pid:           # bara spelaren själv
                     return self._nekad()
@@ -1164,6 +1225,12 @@ class Handler(BaseHTTPRequestHandler):
                              or sida_hem(c, nu_månad(), läge, str(e)))
                         return self._skicka(200, s)
                     return self._redirect(f"/{läge}/player/{pid}?new={nya}")
+                if rest[0] == "repick":
+                    if läge != "turbo" or not välj_om_guld(c, pid):
+                        s = sida_spelare(c, pid, nu_månad(), "turbo",
+                                         fel="No repick available right now.")
+                        return self._skicka(200, s) if s else self._404()
+                    return self._redirect(f"/{läge}/player/{pid}")
                 if c.execute("SELECT 1 FROM players WHERE id=?", (pid,)).fetchone():
                     if vill_listas:
                         anmäl(c, pid, läge)
