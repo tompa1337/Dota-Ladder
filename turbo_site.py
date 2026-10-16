@@ -66,11 +66,13 @@ VILA_EFTER_FEL = 5 * 60     # paus i bakgrundsuppdateringen efter ett fel från 
 # Bestämd första guldhjälte för en viss spelare en viss månad: (Steam32-ID, månad) -> hjälte-id.
 # Resten av ordningen är slumpad som vanligt. 32 = Riki.
 FÖRSTA_GULDHJÄLTE = {(168893053, "2026-10"): 32}
+# Efter så här många förluster med samma guldhjälte hoppas den över automatiskt
+# och nästa hjälte i ordningen blir guldhjälte.
+GULD_HOPPA_FÖRLUSTER = 2
 # Omval av guldhjälten (Turbo). Man börjar månaden med ett omval och kan aldrig ha fler än
-# OMVAL_MAX. Ett nytt omval fås efter OMVAL_FÖRLUSTER förluster med guldhjälten, eller efter
-# OMVAL_MATCHER Turbo-matcher medan samma hjälte är guldhjälte.
+# OMVAL_MAX. Ett nytt omval fås efter OMVAL_MATCHER Turbo-matcher medan samma hjälte är
+# guldhjälte.
 OMVAL_MAX = 1
-OMVAL_FÖRLUSTER = 2
 OMVAL_MATCHER = 5
 # Första pris som visas på topplistorna. Bilden är en kista från Dota 2 och hämtas
 # från Steams bildserver. Byt text eller bild här.
@@ -524,7 +526,7 @@ def spela_månad(c, pid, månad, läge):
     for m, t, w, hero, k, d, a, lobby in rader:
         välj_om(t)
         e = förklara(r, w, k, d, a, motståndarnivå(lobby, egen))
-        e.update(lobby=lobby, egen=egen, guld=None, bonus=0.0, streak=0)
+        e.update(lobby=lobby, egen=egen, guld=None, bonus=0.0, streak=0, hoppad=False)
         if ordning and hero == ordning[nr % len(ordning)]:
             e["guld"] = hero
             if w:                           # vinst med guldhjälten: bonus och ny guldhjälte
@@ -537,10 +539,13 @@ def spela_månad(c, pid, månad, läge):
             else:                           # förlust med guldhjälten bryter sviten
                 streak = 0
                 omval["förluster"] += 1
-        if ordning and not (e["guld"] is not None and w):
+                if omval["förluster"] >= GULD_HOPPA_FÖRLUSTER:
+                    e["hoppad"] = True      # för många förluster: nästa hjälte blir guld
+                    nr += 1
+                    omval.update(förluster=0, spelade=0)
+        if ordning and not (e["guld"] is not None and (w or e["hoppad"])):
             omval["spelade"] += 1           # ännu en match med samma guldhjälte
-            if ((e["guld"] is not None and omval["förluster"] % OMVAL_FÖRLUSTER == 0)
-                    or omval["spelade"] % OMVAL_MATCHER == 0):
+            if omval["spelade"] % OMVAL_MATCHER == 0:
                 omval["kvar"] = min(OMVAL_MAX, omval["kvar"] + 1)
         ut.append({"id": m, "tid": t, "win": w, "hero": hero, "k": k, "d": d, "a": a,
                    "e": e})
@@ -945,7 +950,10 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
                         f"match with this hero for <b>+{en(nästa)} MMR</b> on top of the "
                         f"normal change. {svittext}Each gold win in a row raises the bonus "
                         f"by {en(GULD_BONUS * GULD_STREAK, 0)}, up to +{GULD_MAX}; a loss on your gold "
-                        f"hero resets it. After a win you get a new random gold hero.</p>"
+                        f"hero resets it. After a win you get a new random gold hero, and after "
+                        f"{GULD_HOPPA_FÖRLUSTER} losses with it, it is skipped automatically. "
+                        f"Losses with this gold hero: {omval['förluster']} of "
+                        f"{GULD_HOPPA_FÖRLUSTER}.</p>"
                         f"{omval_html(pid, omval, min_sida)}</div>")
     favoriter = "".join(hjälte_html(hj, h, med_namn=False) for h in mest_spelade(ms, 5))
     return sida(f"{namn} in {lägesnamn}", f"""
@@ -984,11 +992,9 @@ def omval_html(pid, omval, min_sida):
                     f"style='margin-top:14px'><button>Repick gold hero</button>"
                     f"<span class='dim'>{text}</span></form>")
         return f"<p class='note'>{text}</p>"
-    förluster = OMVAL_FÖRLUSTER - omval["förluster"] % OMVAL_FÖRLUSTER
     matcher = OMVAL_MATCHER - omval["spelade"] % OMVAL_MATCHER
-    return (f"<p class='note'>No repick left. You get one after {förluster} more "
-            f"loss{'es' if förluster != 1 else ''} with this gold hero, or after {matcher} more "
-            f"Turbo match{'es' if matcher != 1 else ''} while it stays your gold hero. "
+    return (f"<p class='note'>No repick left. You get one after {matcher} more "
+            f"Turbo match{'es' if matcher != 1 else ''} while this stays your gold hero. "
             f"You can hold at most {OMVAL_MAX}.</p>")
 
 
@@ -1073,8 +1079,10 @@ def sida_match(c, pid, mid, läge):
         steg.append(("Gold hero bonus", f"+{en(e['bonus'])}",
                      f"Won with the gold hero. {hur} A new gold hero was drawn."))
     elif e["guld"] is not None:
+        hoppad = (f" This was loss number {GULD_HOPPA_FÖRLUSTER} with it, so it was skipped "
+                  f"and the next hero became the gold hero." if e["hoppad"] else "")
         steg.append(("Gold hero bonus", "0", "Played the gold hero but lost. No bonus, "
-                     "and the gold win streak was reset."))
+                     f"and the gold win streak was reset.{hoppad}"))
     tecken = "+" if e["ändring"] >= 0 else ""
     steg.append(("MMR change", f"<b class='{'w' if w else 'l'}'>{tecken}{en(e['ändring'])}</b>",
                  "The base change after the K/D/A adjustment"
