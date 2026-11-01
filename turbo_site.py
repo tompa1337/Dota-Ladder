@@ -30,7 +30,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
-from turbo_rank import (FÖRVÄNTAN_VIKT, GULD_BONUS, GULD_MAX, GULD_STREAK, K, KDA_MAX, KDA_NORMAL, SINGLE_DRAFT,
+from turbo_rank import (ASSIST_VIKT, FÖRVÄNTAN_VIKT, GULD_BONUS, GULD_MAX, GULD_STREAK, K, KDA_MAX, KDA_NORMAL, SINGLE_DRAFT,
                         START, TURBO, guldbonus, hämta_profil, motståndarnivå, rank_namn, ApiFel, förklara, giltig,
                         hämta_json, hämta_matcher, inga_matcher_fel, månad_för,
                         månadsgränser, tolka_id, vann, STEAM64_BAS)
@@ -87,6 +87,42 @@ LÄGEN = {"turbo": (TURBO, "Turbo", "Fast games, quick gold and experience."),
          "sd": (SINGLE_DRAFT, "Single Draft", "Pick from four random heroes.")}
 BILDER = "https://cdn.cloudflare.steamstatic.com"   # här ligger Dotas hjältebilder
 HJÄLTE_ÅLDER = 7 * 24 * 3600   # hämta om hjältelistan en gång i veckan (nya hjältar)
+# ---------- Ladder Pass (ett gratis månadspass, likt Dotas gamla Battle Pass) ----------
+# XP kommer från alla matcher i båda stegarna och från månadens uppdrag. Allt räknas om
+# från matcherna i databasen, precis som MMR, så inget behöver sparas utom anmälan.
+PASS = -1                   # entries.mode för passet (inget riktigt spelläge)
+PASS_NAMN = "Ladder Pass"
+XP_VINST = 100              # XP per vunnen match (Turbo eller Single Draft)
+XP_FÖRLUST = 40             # XP per förlorad match
+NIVÅ_XP = 500               # XP per nivå
+PASS_UPPDRAG = 8            # antal uppdrag per månad (det utvalda + sju slumpade)
+PASS_UTVALDA = 3            # antal utvalda hjältar per månad
+# Uppdrag: nyckel -> (XP, möjliga mål, text). Vilka uppdrag och mål en månad får slumpas
+# med månaden som frö, så alla får samma uppdrag och de ändras inte under månaden.
+# Ändras listan här ändras också innevarande månads uppdrag.
+UPPDRAG = {
+    "utvald": (500, (2, 3, 4), "Win {n} matches with a featured hero"),
+    "spela": (300, (20, 25, 30), "Play {n} matches"),
+    "turbo": (300, (8, 10, 12), "Win {n} Turbo matches"),
+    "sd": (350, (3, 4, 5), "Win {n} Single Draft matches"),
+    "kills": (300, (15, 18, 20), "Get {n} kills in one match"),
+    "assists": (300, (20, 25, 30), "Get {n} assists in one match"),
+    "rena": (350, (3, 4, 5), "Win {n} matches with 2 deaths or fewer"),
+    "hjältar": (350, (6, 8, 10), "Win with {n} different heroes"),
+    "svit": (400, (3, 4, 5), "Win {n} matches in a row"),
+    "guld": (400, (2, 3, 4), "Win {n} Turbo matches with your gold hero"),
+    "kda": (300, (3, 4, 5), "Finish {n} matches with a K/D/A score of 4 or more"),
+}
+# Belöningar på sajten: (nivå, text). Märket syns bredvid namnet på stegarna.
+BELÖNINGAR = [(1, "Bronze pass badge next to your name on the ladders"),
+              (5, "Silver pass badge"), (10, "Gold pass badge"),
+              (15, "Title \"Seasoned\" on your pass profile"), (20, "Mythic pass badge"),
+              (30, "Title \"Relentless\" on your pass profile")]
+MÄRKEN = [(20, "mythic"), (10, "gold"), (5, "silver"), (1, "bronze")]   # (från nivå, klass)
+TITLAR = [(30, "Relentless"), (15, "Seasoned")]
+# Pris till den som har mest XP när månaden slutar. Byt text eller bild här.
+PASS_PRIS_TEXT = PRIS_TEXT
+PASS_PRIS_BILD = PRIS_BILD
 MÅNADER = ["January", "February", "March", "April", "May", "June", "July",
            "August", "September", "October", "November", "December"]
 
@@ -154,6 +190,8 @@ def db():
     # gold_repick = när spelaren valde om sin guldhjälte (Turbo), en rad per omval.
     c.execute("CREATE TABLE IF NOT EXISTS gold_repick(player_id INTEGER, month TEXT, "
               "time INTEGER)")
+    # pass_heroes = passets utvalda hjältar för månaden, som JSON-lista.
+    c.execute("CREATE TABLE IF NOT EXISTS pass_heroes(month TEXT PRIMARY KEY, heroes TEXT)")
     # sessions = inloggningar. Bara en hash av kakans värde sparas, aldrig värdet självt.
     c.execute("CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, "
               "player_id INTEGER, expires INTEGER)")
@@ -565,10 +603,131 @@ def spelarstat(c, pid, månad, läge):
             "f": n - v, "wr": round(100 * v / n, 1) if n else 0, "matcher": ms}
 
 
+# ---------- Ladder Pass ----------
+def pass_anmälan(c, pid, månad):
+    """True om spelaren är med i passet den månaden, False om hen har lämnat, None om aldrig."""
+    rad = c.execute("SELECT active FROM entries WHERE player_id=? AND month=? AND mode=?",
+                    (pid, månad, PASS)).fetchone()
+    return bool(rad[0]) if rad else None
+
+
+def pass_anmäl(c, pid, med):
+    """Går med i (med=True) eller lämnar passet för innevarande månad."""
+    c.execute("INSERT INTO entries(player_id,month,mode,active) VALUES(?,?,?,?) "
+              "ON CONFLICT(player_id,month,mode) DO UPDATE SET active=excluded.active",
+              (pid, nu_månad(), PASS, int(med)))
+    c.commit()
+
+
+def pass_anmälda(c, månad=None):
+    return [r[0] for r in c.execute("SELECT player_id FROM entries WHERE month=? AND mode=? "
+                                    "AND active=1", (månad or nu_månad(), PASS))]
+
+
+def pass_hjältar(c, månad):
+    """Månadens utvalda hjältar. Sparas första gången, så att de inte byts om Dota får
+    en ny hjälte mitt i månaden. [] om hjältelistan inte har hämtats än."""
+    rad = c.execute("SELECT heroes FROM pass_heroes WHERE month=?", (månad,)).fetchone()
+    if rad:
+        return json.loads(rad[0])
+    alla = [r[0] for r in c.execute("SELECT id FROM heroes ORDER BY id")]
+    if not alla:
+        return []
+    valda = random.Random(f"utvalda-{månad}").sample(alla, min(PASS_UTVALDA, len(alla)))
+    c.execute("INSERT OR IGNORE INTO pass_heroes VALUES(?,?)", (månad, json.dumps(valda)))
+    c.commit()
+    return valda
+
+
+def pass_uppdrag(månad):
+    """Månadens uppdrag: det utvalda först, sedan sju slumpade. Samma för alla."""
+    rng = random.Random(f"uppdrag-{månad}")
+    övriga = rng.sample([k for k in UPPDRAG if k != "utvald"], PASS_UPPDRAG - 1)
+    return [{"typ": k, "n": rng.choice(UPPDRAG[k][1]), "xp": UPPDRAG[k][0]}
+            for k in ["utvald"] + övriga]
+
+
+def pass_matcher(c, pid, månad):
+    """Spelarens matcher i alla stegar under månaden, äldsta först."""
+    ut = []
+    for läge in LÄGEN:
+        for m in månadens_matcher(c, pid, månad, läge):
+            ut.append({**m, "läge": läge, "guldvinst": bool(m["e"]["bonus"])})
+    ut.sort(key=lambda m: (m["tid"], m["id"]))
+    return ut
+
+
+def framsteg(typ, ms, utvalda):
+    """Hur långt spelaren har kommit på ett uppdrag (antal, eller bästa värde)."""
+    vinster = [m for m in ms if m["win"]]
+    if typ == "utvald":
+        return sum(1 for m in vinster if m["hero"] in utvalda)
+    if typ == "spela":
+        return len(ms)
+    if typ in ("turbo", "sd"):
+        return sum(1 for m in vinster if m["läge"] == typ)
+    if typ == "kills":
+        return max((m["k"] or 0 for m in ms), default=0)
+    if typ == "assists":
+        return max((m["a"] or 0 for m in ms), default=0)
+    if typ == "rena":
+        return sum(1 for m in vinster if m["d"] is not None and m["d"] <= 2)
+    if typ == "hjältar":
+        return len({m["hero"] for m in vinster if m["hero"] is not None})
+    if typ == "svit":
+        bäst = nu = 0
+        for m in ms:
+            nu = nu + 1 if m["win"] else 0
+            bäst = max(bäst, nu)
+        return bäst
+    if typ == "guld":
+        return sum(1 for m in ms if m["guldvinst"])
+    if typ == "kda":
+        return sum(1 for m in ms if None not in (m["k"], m["d"], m["a"])
+                   and (m["k"] + m["a"] * ASSIST_VIKT) / max(m["d"], 1) >= 4)
+    return 0
+
+
+def pass_status(c, pid, månad):
+    """XP, nivå och uppdragens framsteg för en spelare en månad."""
+    ms = pass_matcher(c, pid, månad)
+    utvalda = pass_hjältar(c, månad)
+    uppdrag = []
+    for u in pass_uppdrag(månad):
+        f = framsteg(u["typ"], ms, utvalda)
+        uppdrag.append({**u, "framsteg": min(f, u["n"]), "klar": f >= u["n"]})
+    match_xp = sum(XP_VINST if m["win"] else XP_FÖRLUST for m in ms)
+    uppdrag_xp = sum(u["xp"] for u in uppdrag if u["klar"])
+    xp = match_xp + uppdrag_xp
+    return {"xp": xp, "nivå": xp // NIVÅ_XP, "match_xp": match_xp, "uppdrag_xp": uppdrag_xp,
+            "uppdrag": uppdrag, "klara": sum(u["klar"] for u in uppdrag), "n": len(ms),
+            "v": sum(m["win"] for m in ms)}
+
+
+def märke_html(nivå):
+    """Passmärket för en nivå, eller '' under nivå 1."""
+    klass = next((k for från, k in MÄRKEN if nivå >= från), None)
+    if not klass:
+        return ""
+    return (f"<span class='badge {klass}' title='{PASS_NAMN} level {nivå}'>"
+            f"Lv {nivå}</span>")
+
+
+def titel(nivå):
+    return next((t for från, t in TITLAR if nivå >= från), "")
+
+
+def pass_märke(c, pid, månad):
+    """Märket som visas bredvid namnet på stegarna, bara för spelare med i passet."""
+    if not pass_anmälan(c, pid, månad):
+        return ""
+    return märke_html(pass_status(c, pid, månad)["nivå"])
+
+
 # ---------- sidor ----------
 CSS = """
 :root{--bg:#0f1820;--panel:#16232d;--line:#243542;--text:#e7edf0;--dim:#8ea2ae;
---gold:#e5b450;--radiant:#74d195;--dire:#e96a55;--link:#9fd4e8}
+--gold:#e5b450;--radiant:#74d195;--dire:#e96a55;--link:#9fd4e8;--pass:#b9a2f5}
 *{box-sizing:border-box}
 body{font-family:Barlow,"Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.5;
 color:var(--text);margin:0;padding:0 16px 48px;
@@ -594,7 +753,7 @@ color:#e7edf0;font-weight:600}
 font-weight:500}
 .modes a.on{border-color:var(--gold);color:var(--gold)}
 .modes a:hover{text-decoration:none;color:var(--text)}
-.tiles{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:8px}
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin-top:8px}
 .tile{aspect-ratio:1/1;display:flex;flex-direction:column;justify-content:flex-end;
 padding:28px;border:2px solid var(--line);border-radius:8px;color:var(--text);
 background:var(--panel);transition:border-color .15s,transform .15s}
@@ -603,9 +762,47 @@ background:var(--panel);transition:border-color .15s,transform .15s}
 .tile:hover{text-decoration:none;transform:translateY(-3px)}
 .tile.turbo:hover,.tile.turbo:focus-visible{border-color:var(--gold)}
 .tile.sd:hover,.tile.sd:focus-visible{border-color:var(--link)}
-.tile .name{font-family:"Barlow Condensed",sans-serif;font-size:clamp(34px,7vw,64px);
+.tile.pass{background:linear-gradient(160deg,#2c1f4a 0,var(--panel) 60%)}
+.tile.pass:hover,.tile.pass:focus-visible{border-color:var(--pass)}
+.tile .name{font-family:"Barlow Condensed",sans-serif;font-size:clamp(30px,5vw,48px);
 font-weight:700;font-style:italic;line-height:1}
 .tile.turbo .name{color:var(--gold)}.tile.sd .name{color:var(--link)}
+.tile.pass .name{color:var(--pass)}
+.modes a.pass.on{border-color:var(--pass);color:var(--pass)}
+/* Ladder Pass */
+.badge{font-size:12px;font-weight:700;border-radius:3px;padding:1px 6px;margin-left:8px;
+vertical-align:middle;white-space:nowrap}
+.badge.bronze{background:#b07a48;color:#1a1005}.badge.silver{background:#c3ccd2;color:#11181d}
+.badge.gold{background:var(--gold);color:#1a1405}
+.badge.mythic{background:linear-gradient(90deg,#8d6cf0,#d78cf0);color:#160d26}
+h1 .badge{font-size:16px;padding:3px 9px;margin-left:12px}
+.card.pass{border-color:var(--pass);background:linear-gradient(100deg,rgba(185,162,245,.16),
+var(--panel) 55%)}
+.card.pass h2{color:var(--pass)}
+.bar{height:10px;background:#0c141b;border:1px solid var(--line);border-radius:5px;
+overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;background:var(--pass)}
+.bar.done i{background:var(--radiant)}
+.bar.big{height:16px;border-radius:8px}
+.quests,.track{list-style:none;padding:0;margin:0}
+.quests li{padding:12px 0;border-bottom:1px solid var(--line)}
+.quests li:last-child,.track li:last-child{border-bottom:0}
+.quests .row1{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.quests .xp{color:var(--pass);font-weight:600;white-space:nowrap}
+.quests .done .xp{color:var(--radiant)}
+.quests .prog{color:var(--dim);font-size:13px;margin-top:3px}
+.track li{display:flex;gap:14px;align-items:center;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.track .lv{font-family:"Barlow Condensed",sans-serif;font-size:22px;font-weight:700;width:58px;flex:none;white-space:nowrap;
+color:var(--dim)}
+.track .got .lv{color:var(--pass)} .track .got .tick{color:var(--radiant)}
+.track .tick{margin-left:auto;color:var(--dim);font-size:14px;white-space:nowrap}
+.featured{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px}
+.ladder .lvl{font-family:"Barlow Condensed",sans-serif;font-size:32px;font-weight:700;
+color:var(--pass)}
+.ladder tr.p1 .lvl{color:var(--gold)}
+.stats .passstat b{color:var(--pass)}
+.title{color:var(--pass);font-style:italic;font-weight:600}
 .tile .what{margin-top:10px;font-size:17px}
 .tile .count{margin-top:6px;color:var(--dim);font-size:14px}
 @media(prefers-reduced-motion:reduce){.tile{transition:none}.tile:hover{transform:none}}
@@ -682,8 +879,9 @@ background:linear-gradient(100deg,rgba(229,180,80,.18),var(--panel) 60%)}
 .note{color:var(--dim);font-size:14px;margin:12px 0 0;max-width:70ch}
 svg.curve{width:100%;height:auto;display:block}
 @media(max-width:560px){h1{font-size:34px}.ladder .mmr{font-size:26px}.hide-s{display:none}
-.stats{gap:18px}.stats b{font-size:32px}.tiles{gap:12px}.tile{padding:16px}
-.tile .what{font-size:14px}}
+.stats{gap:18px}.stats b{font-size:32px}.tiles{gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}
+.tile{padding:16px}.tile .what{font-size:14px}
+.tile.pass{grid-column:1/-1;aspect-ratio:auto;min-height:150px}.ladder .lvl{font-size:26px}}
 """
 FONTER = ("<link rel='preconnect' href='https://fonts.googleapis.com'>"
           "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>"
@@ -697,7 +895,8 @@ def sida(titel, body, läge=None, väg="/"):
     if läge:
         växel = "<nav class='modes' aria-label='Game mode'>" + "".join(
             f"<a class='{'on' if k == läge else ''}' href='/{k}'>{v[1]}</a>"
-            for k, v in LÄGEN.items()) + "</nav>"
+            for k, v in LÄGEN.items()) + (
+            f"<a class='pass {'on' if läge == 'pass' else ''}' href='/pass'>Pass</a></nav>")
     pid = inloggad()
     if pid:
         konto = (f"<form class='acct' method='post' action='/logout'>"
@@ -724,10 +923,17 @@ def sida_meny(c):
                    else f"{n} player{'s' if n != 1 else ''} registered this month")
         knappar += (f"<a class='tile {k}' href='/{k}'><span class='name'>{namn}</span>"
                     f"<span class='what'>{text}</span><span class='count'>{spelare}</span></a>")
+    n = len(pass_anmälda(c, månad))
+    spelare = ("Nobody has joined yet" if not n
+               else f"{n} player{'s' if n != 1 else ''} joined this month")
+    knappar += (f"<a class='tile pass' href='/pass'><span class='name'>{PASS_NAMN}</span>"
+                f"<span class='what'>Free monthly pass: quests, levels and badges.</span>"
+                f"<span class='count'>{spelare}</span></a>")
     return sida(SAJTNAMN, f"""
 <h1>Choose a ladder</h1>
 <p class='sub'>Monthly Dota 2 ladders. Everyone starts at {START} MMR on the 1st of every
-month, and you can join both ladders.</p>
+month, and you can join both ladders. The {PASS_NAMN} gives XP for every match in
+either ladder.</p>
 <div class='tiles'>{knappar}</div>""")
 
 
@@ -773,7 +979,8 @@ def sida_hem(c, månad, läge, fel=""):
                else "<span class='tag'>no matches yet</span>")
         ikoner = "".join(hjälte_html(hj, h, med_namn=False) for h in mest_spelade(s["matcher"]))
         rader += (f"<tr class='{klass}'><td class='pos'>{i}</td>"
-                  f"<td class='who'><a href='/{läge}/player/{pid}{fråga}'>{html.escape(namn)}</a>{kal}</td>"
+                  f"<td class='who'><a href='/{läge}/player/{pid}{fråga}'>{html.escape(namn)}</a>"
+                  f"{pass_märke(c, pid, månad)}{kal}</td>"
                   f"<td class='heroes hide-s'>{ikoner}</td>"
                   f"<td class='mmr r'>{s['rating']}</td><td class='r'>{s['n']}</td>"
                   f"<td class='r'>{s['v']}-{s['f']}</td><td class='r hide-s'>{s['wr']}%</td></tr>")
@@ -956,9 +1163,12 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
                         f"{GULD_HOPPA_FÖRLUSTER}.</p>"
                         f"{omval_html(pid, omval, min_sida)}</div>")
     favoriter = "".join(hjälte_html(hj, h, med_namn=False) for h in mest_spelade(ms, 5))
+    märke = pass_märke(c, pid, månad)       # passmärket leder till spelarens passida
+    if märke:
+        märke = f"<a href='/pass/player/{pid}{fråga}'>{märke}</a>"
     return sida(f"{namn} in {lägesnamn}", f"""
 <a class='back' href='/{läge}{fråga}'>Back to the {lägesnamn} leaderboard</a>
-<h1>{html.escape(namn)}</h1>
+<h1>{html.escape(namn)}{märke}</h1>
 {månadsväljare(månad, f'/{läge}/player/{pid}')}
 <div class='stats'><div class='lead'><b>{s['rating']}</b><span>MMR</span></div>
 <div><b>{s['n']}</b><span>matches</span></div>
@@ -1104,6 +1314,184 @@ def sida_match(c, pid, mid, läge):
 {rader}</table></div>""", läge, f"/{läge}/player/{pid}/match/{mid}")
 
 
+# ---------- Ladder Pass-sidor ----------
+def uppdrag_html(c, månad, status=None):
+    """Månadens uppdrag. Med status visas spelarens framsteg på varje uppdrag."""
+    hj = hjältar(c)
+    lista = status["uppdrag"] if status else pass_uppdrag(månad)
+    rader = ""
+    for u in lista:
+        text = html.escape(UPPDRAG[u["typ"]][2].format(n=u["n"]))
+        if status:
+            klar = u["klar"]
+            procent = round(100 * u["framsteg"] / u["n"])
+            rader += (f"<li class='{'done' if klar else ''}'><div class='row1'><span>{text}</span>"
+                      f"<span class='xp'>{'&#10003; ' if klar else ''}+{u['xp']} XP</span></div>"
+                      f"<div class='bar {'done' if klar else ''}' role='progressbar' "
+                      f"aria-valuemin='0' aria-valuemax='{u['n']}' aria-valuenow='{u['framsteg']}' "
+                      f"aria-label='{text}'><i style='width:{procent}%'></i></div>"
+                      f"<div class='prog'>{u['framsteg']} / {u['n']}"
+                      f"{' &middot; completed' if klar else ''}</div></li>")
+        else:
+            rader += (f"<li><div class='row1'><span>{text}</span>"
+                      f"<span class='xp'>+{u['xp']} XP</span></div></li>")
+    utvalda = pass_hjältar(c, månad)
+    hjältetext = ("".join(hjälte_html(hj, h) for h in utvalda) if utvalda
+                  else "<span class='dim'>Not picked yet: the hero list is still loading.</span>")
+    return (f"<div class='card'><h2>Quests for {månadsnamn(månad)}</h2>"
+            f"<ul class='quests'>{rader}</ul>"
+            f"<p class='note'>Featured heroes this month:</p><div class='featured'>{hjältetext}"
+            f"</div><p class='note'>Quests count Turbo and Single Draft matches from the whole "
+            f"month. Every match also gives XP: +{XP_VINST} for a win, +{XP_FÖRLUST} for a "
+            f"loss.</p></div>")
+
+
+def belöningar_html(nivå=None):
+    """Belöningsstegen. Med nivå markeras det som redan är upplåst."""
+    rader = ""
+    for lv, text in BELÖNINGAR:
+        fått = nivå is not None and nivå >= lv
+        if fått:
+            bock = "Unlocked"
+        elif nivå is not None:
+            bock = f"{lv - nivå} level{'s' if lv - nivå != 1 else ''} to go"
+        else:
+            bock = ""
+        rader += (f"<li class='{'got' if fått else ''}'><span class='lv'>Lv {lv}</span>"
+                  f"<span>{html.escape(text)}</span>"
+                  f"<span class='tick'>{'&#10003; ' if fått else ''}{bock}</span></li>")
+    return (f"<div class='card'><h2>Rewards</h2><ul class='track'>{rader}</ul>"
+            f"<p class='note'>Badges and titles live on this site and last for the month. "
+            f"Levels reset on the 1st, like the ladders.</p></div>")
+
+
+def nivå_html(s):
+    """Nivå, XP och stapel mot nästa nivå."""
+    in_i_nivå = s["xp"] % NIVÅ_XP
+    return (f"<div class='stats'><div class='passstat'><b>{s['nivå']}</b><span>level</span></div>"
+            f"<div><b>{s['xp']}</b><span>XP</span></div>"
+            f"<div><b>{s['klara']}/{len(s['uppdrag'])}</b><span>quests done</span></div>"
+            f"<div><b>{s['n']}</b><span>matches</span></div></div>"
+            f"<div class='bar big' role='progressbar' aria-valuemin='0' "
+            f"aria-valuemax='{NIVÅ_XP}' aria-valuenow='{in_i_nivå}' "
+            f"aria-label='XP toward level {s['nivå'] + 1}'>"
+            f"<i style='width:{round(100 * in_i_nivå / NIVÅ_XP)}%'></i></div>"
+            f"<p class='note'>{in_i_nivå} / {NIVÅ_XP} XP toward level {s['nivå'] + 1}. "
+            f"{s['match_xp']} XP from matches, {s['uppdrag_xp']} XP from quests.</p>")
+
+
+def pass_knapp(c, pid):
+    """Gå med i eller lämna passet för innevarande månad (bara för spelaren själv)."""
+    nu = pass_anmälan(c, pid, nu_månad())
+    post = f"<form class='row' method='post' action='/pass/list/{pid}'>"
+    denna = månadsnamn(nu_månad())
+    if nu:
+        return (f"{post}<input type='hidden' name='listed' value='0'><span class='ok'>You are "
+                f"in the {PASS_NAMN} for {denna}.</span> "
+                f"<button class='quiet'>Leave the pass</button></form>")
+    return (f"{post}<input type='hidden' name='listed' value='1'><span class='dim'>"
+            f"{'You left' if nu is False else 'Not in'} the {PASS_NAMN} for {denna}. "
+            f"Join to show up on the pass leaderboard and get your badge.</span> "
+            f"<button>Join the pass</button></form>")
+
+
+def sida_pass(c, månad, fel=""):
+    """Passets startsida: pris, din nivå, uppdrag, belöningar och topplistan."""
+    fråga = "" if månad == nu_månad() else f"?month={månad}"
+    stat = [(pid, namn, pass_status(c, pid, månad)) for pid, namn in c.execute(
+        "SELECT p.id,p.name FROM players p JOIN entries e ON e.player_id=p.id "
+        "WHERE e.month=? AND e.mode=? AND e.active=1", (månad, PASS)).fetchall()]
+    stat.sort(key=lambda x: (x[2]["xp"], x[2]["klara"]), reverse=True)
+    rader = ""
+    for i, (pid, namn, s) in enumerate(stat, 1):
+        klass = f"p{i}" if i <= 3 and s["xp"] else ""
+        rader += (f"<tr class='{klass}'><td class='pos'>{i}</td>"
+                  f"<td class='who'><a href='/pass/player/{pid}{fråga}'>{html.escape(namn)}</a>"
+                  f"{märke_html(s['nivå'])}</td><td class='lvl r'>{s['nivå']}</td>"
+                  f"<td class='r'>{s['xp']}</td><td class='r hide-s'>{s['klara']}/"
+                  f"{len(s['uppdrag'])}</td><td class='r hide-s'>{s['n']}</td></tr>")
+    if not rader:
+        rader = (f"<tr><td colspan=6 class='dim wide'>Nobody has joined the {PASS_NAMN} for "
+                 f"{månadsnamn(månad)} yet.</td></tr>")
+
+    jag = inloggad()
+    finns = jag and c.execute("SELECT 1 FROM players WHERE id=?", (jag,)).fetchone()
+    if finns:
+        s = pass_status(c, jag, månad)
+        knapp = pass_knapp(c, jag) if månad == nu_månad() else ""
+        t = titel(s["nivå"])
+        egen = (f"<div class='card pass'><h2>Your pass{märke_html(s['nivå'])}</h2>"
+                f"{'<p class=title>' + t + '</p>' if t else ''}{nivå_html(s)}{knapp}"
+                f"{ruta(fel, 'err')}<p class='note'><a href='/pass/player/{jag}{fråga}'>See your "
+                f"quest progress</a></p></div>")
+        uppdrag = uppdrag_html(c, månad, s)
+        belöning = belöningar_html(s["nivå"])
+    else:
+        egen = (f"<div class='card pass'><h2>Join the {PASS_NAMN}</h2>"
+                f"<p><a class='steam big' href='/login?next=/pass'>Sign in through Steam</a></p>"
+                f"{ruta(fel, 'err')}<p class='note'>It is free. Sign in, join the pass and play "
+                f"Turbo or Single Draft as usual. Turn on \"Expose Public Match Data\" in Dota "
+                f"first.</p></div>")
+        uppdrag = uppdrag_html(c, månad)
+        belöning = belöningar_html()
+
+    ledare = (f"Right now that is <b>{html.escape(stat[0][1])}</b>."
+              if stat and stat[0][2]["xp"] else "Nobody has any XP yet.")
+    pris = (f"<div class='prize'><img src='{PASS_PRIS_BILD}' alt='' width='96' height='96' "
+            f"onerror=\"this.style.display='none'\"><div><h2>1st prize</h2>"
+            f"<p class='what'>{html.escape(PASS_PRIS_TEXT)}</p><p class='note'>"
+            + (f"Whoever has the most pass XP when {månadsnamn(månad)} ends wins it. {ledare}"
+               if månad == nu_månad() else
+               f"It went to whoever had the most pass XP in {månadsnamn(månad)}.")
+            + "</p></div></div>")
+
+    return sida(PASS_NAMN, f"""
+<h1>{PASS_NAMN}</h1>
+{månadsväljare(månad, '/pass')}
+<p class='sub'>A free monthly pass for both ladders. Every Turbo and Single Draft match gives
+XP, quests give more, and every {NIVÅ_XP} XP is a new level with badges and titles to
+unlock. Everyone starts over on the 1st.</p>
+{pris}
+{egen}
+<div class='card wrap'><h2>Pass leaderboard</h2>
+<table class='ladder'><tr><th>#</th><th>Player</th><th class='r'>Level</th>
+<th class='r'>XP</th><th class='r hide-s'>Quests</th><th class='r hide-s'>Matches</th></tr>
+{rader}</table></div>
+{uppdrag}
+{belöning}""", "pass", "/pass")
+
+
+def sida_pass_spelare(c, pid, månad):
+    """En spelares pass: nivå, uppdrag med framsteg och belöningar."""
+    p = c.execute("SELECT name,updated FROM players WHERE id=?", (pid,)).fetchone()
+    if not p:
+        return None
+    fråga = "" if månad == nu_månad() else f"?month={månad}"
+    s = pass_status(c, pid, månad)
+    min_sida = inloggad() == pid
+    med = pass_anmälan(c, pid, nu_månad())
+    if min_sida:
+        knapp = pass_knapp(c, pid)
+    elif med:
+        knapp = f"<span class='ok'>In the {PASS_NAMN} for {månadsnamn(nu_månad())}.</span>"
+    else:
+        knapp = f"<span class='dim'>Not in the {PASS_NAMN} for {månadsnamn(nu_månad())}.</span>"
+    t = titel(s["nivå"])
+    tid = time.strftime("%Y-%m-%d %H:%M", time.localtime(p[1])) if p[1] else "never"
+    profil = " &middot; ".join(f"<a href='/{k}/player/{pid}{fråga}'>{v[1]} profile</a>"
+                               for k, v in LÄGEN.items())
+    return sida(f"{p[0]} in the {PASS_NAMN}", f"""
+<a class='back' href='/pass{fråga}'>Back to the {PASS_NAMN}</a>
+<h1>{html.escape(p[0])}{märke_html(s['nivå']) if pass_anmälan(c, pid, månad) else ''}</h1>
+{f"<p class='title'>{t}</p>" if t else ''}
+{månadsväljare(månad, f'/pass/player/{pid}')}
+<div class='card pass'>{nivå_html(s)}{knapp}
+<p class='note'>Last updated {tid}. New matches are fetched automatically when someone opens
+the page. {profil}</p></div>
+{uppdrag_html(c, månad, s)}
+{belöningar_html(s['nivå'])}""", "pass", f"/pass/player/{pid}")
+
+
 # ---------- server ----------
 class Handler(BaseHTTPRequestHandler):
     def _skicka(self, kod, body, typ="text/html; charset=utf-8", extra=None):
@@ -1144,6 +1532,15 @@ class Handler(BaseHTTPRequestHandler):
                 köa_uppdatering(c, anmälda(c), FÄRSK_LISTA)
                 return self._skicka(200, med_status(sida_meny(c)))
             läge, rest = delar[0], delar[1:]
+            if läge == "pass":
+                if not rest:
+                    köa_uppdatering(c, pass_anmälda(c), FÄRSK_LISTA)
+                    return self._skicka(200, med_status(sida_pass(c, månad)))
+                if len(rest) == 2 and rest[0] == "player" and rest[1].isdigit():
+                    s = sida_pass_spelare(c, int(rest[1]), månad)
+                    if s:
+                        köa_uppdatering(c, [int(rest[1])], FÄRSK_PROFIL)
+                        return self._skicka(200, med_status(s))
             if läge in LÄGEN:
                 if not rest:
                     köa_uppdatering(c, anmälda(c, läge), FÄRSK_LISTA)
@@ -1210,6 +1607,14 @@ class Handler(BaseHTTPRequestHandler):
                     pass
                 _begäran.pid = None
                 return self._redirect("/", {"Set-Cookie": kaka("", 0)})
+            if len(delar) == 3 and delar[:2] == ["pass", "list"] and delar[2].isdigit():
+                pid = int(delar[2])
+                if inloggad() != pid:           # bara spelaren själv
+                    return self._nekad()
+                if not c.execute("SELECT 1 FROM players WHERE id=?", (pid,)).fetchone():
+                    return self._404()
+                pass_anmäl(c, pid, vill_listas)
+                return self._redirect(f"/pass/player/{pid}")
             if not delar or delar[0] not in LÄGEN:
                 return self._404()
             läge, rest = delar[0], delar[1:]
