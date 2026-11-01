@@ -36,6 +36,10 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
   märke). **Nivå-upp-animation** visas när man öppnar sitt pass efter att ha gått upp i nivå.
   Mest XP vid månadens slut vinner ett pris. Allt räknas om från matcherna,
   bara anmälan sparas. Uppdrag, XP och belöningar ändras i början av `turbo_site.py`.
+- **Stängd beta:** högst 80 spelare kan logga in (`TURBO_MAX_PLAYERS`, 0 = inget tak).
+  Den som redan har en plats kommer alltid in. Loggar någon in när det är fullt hamnar hen på
+  en väntelista och kommer in automatiskt vid nästa inloggning när fler platser öppnas.
+  Startsidan visar hur många platser som är kvar.
 - **Inloggning med Steam:** spelaren loggar in på Steams egen sida. Sajten ser aldrig
   lösenordet. Bara inloggad spelare kan anmäla sig själv till en stege.
 - **Automatisk uppdatering:** nya matcher hämtas i bakgrunden när någon öppnar en sida.
@@ -55,6 +59,7 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
 | `TURBO_URL` | `http://localhost:8000`, eller Railways domän | Sajtens adress utåt. Behöver bara sättas för en egen domän |
 | `TURBO_HOST` | `127.0.0.1` lokalt, `0.0.0.0` på nätet | Vilket nätverkskort sajten lyssnar på |
 | `TURBO_PORT` | `8000` | Porten sajten lyssnar på. Saknas den används `PORT`, som värdtjänster brukar sätta |
+| `TURBO_MAX_PLAYERS` | `80` | Max antal spelare i betan. `0` tar bort taket |
 | `TURBO_DB` | `turbo.db` bredvid koden, eller på Railways volym | Sökväg till databasfilen, t.ex. på en disk som sparas mellan omstarter |
 
 När `TURBO_URL` inte är localhost stängs testformuläret "track a player by ID" av.
