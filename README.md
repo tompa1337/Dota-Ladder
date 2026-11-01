@@ -25,8 +25,10 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
   på startsidan (`/pass`). Varje match i båda stegarna ger XP (+100 vinst, +40 förlust),
   och åtta månadsuppdrag ger mer (300–500 XP). Varje uppdrag slumpas fram per månad och är
   samma för alla, och tre utvalda hjältar väljs varje månad. 500 XP per nivå. Belöningar:
-  märken (brons, silver, guld, mythic) bredvid namnet på stegarna och titlar på
-  passprofilen. Mest XP vid månadens slut vinner ett pris. Allt räknas om från matcherna,
+  märken (brons, silver, guld, mythic) bredvid namnet på stegarna, titlar på
+  passprofilen och ett lysande namn från nivå 25. Sidan har en banner med nivåemblem,
+  en vågrät belöningsbana med 30 nivåer, uppdragskort och stora porträtt av de utvalda
+  hjältarna. Mest XP vid månadens slut vinner ett pris. Allt räknas om från matcherna,
   bara anmälan sparas. Uppdrag, XP och belöningar ändras i början av `turbo_site.py`.
 - **Inloggning med Steam:** spelaren loggar in på Steams egen sida. Sajten ser aldrig
   lösenordet. Bara inloggad spelare kan anmäla sig själv till en stege.

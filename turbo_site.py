@@ -113,11 +113,17 @@ UPPDRAG = {
     "guld": (400, (2, 3, 4), "Win {n} Turbo matches with your gold hero"),
     "kda": (300, (3, 4, 5), "Finish {n} matches with a K/D/A score of 4 or more"),
 }
-# Belöningar på sajten: (nivå, text). Märket syns bredvid namnet på stegarna.
-BELÖNINGAR = [(1, "Bronze pass badge next to your name on the ladders"),
-              (5, "Silver pass badge"), (10, "Gold pass badge"),
-              (15, "Title \"Seasoned\" on your pass profile"), (20, "Mythic pass badge"),
-              (30, "Title \"Relentless\" on your pass profile")]
+# Belöningar på sajten: (nivå, sort, namn, beskrivning). Sorten styr bilden på
+# belöningsbanan. Märket syns bredvid namnet på stegarna.
+BELÖNINGAR = [(1, "bronze", "Bronze badge", "Next to your name on the ladders"),
+              (5, "silver", "Silver badge", "Upgrades your ladder badge"),
+              (10, "gold", "Gold badge", "Upgrades your ladder badge"),
+              (15, "title", "Seasoned", "Title on your pass profile"),
+              (20, "mythic", "Mythic badge", "The top ladder badge"),
+              (25, "glow", "Glowing name", "Your name glows on the ladders"),
+              (30, "title", "Relentless", "Title on your pass profile")]
+PASS_MAXNIVÅ = 30           # så många nivåer visas på belöningsbanan
+GLÖD_NIVÅ = 25              # från den här nivån lyser namnet på stegarna
 MÄRKEN = [(20, "mythic"), (10, "gold"), (5, "silver"), (1, "bronze")]   # (från nivå, klass)
 TITLAR = [(30, "Relentless"), (15, "Seasoned")]
 # Pris till den som har mest XP när månaden slutar. Byt text eller bild här.
@@ -717,11 +723,22 @@ def titel(nivå):
     return next((t for från, t in TITLAR if nivå >= från), "")
 
 
+def nivåklass(nivå):
+    """'bronze', 'silver' ... för nivån, eller 'none' under nivå 1."""
+    return next((k for från, k in MÄRKEN if nivå >= från), "none")
+
+
+def pass_nivå(c, pid, månad):
+    """Spelarens passnivå, eller None om hen inte är med i passet den månaden."""
+    if not pass_anmälan(c, pid, månad):
+        return None
+    return pass_status(c, pid, månad)["nivå"]
+
+
 def pass_märke(c, pid, månad):
     """Märket som visas bredvid namnet på stegarna, bara för spelare med i passet."""
-    if not pass_anmälan(c, pid, månad):
-        return ""
-    return märke_html(pass_status(c, pid, månad)["nivå"])
+    nivå = pass_nivå(c, pid, månad)
+    return märke_html(nivå) if nivå is not None else ""
 
 
 # ---------- sidor ----------
@@ -762,7 +779,7 @@ background:var(--panel);transition:border-color .15s,transform .15s}
 .tile:hover{text-decoration:none;transform:translateY(-3px)}
 .tile.turbo:hover,.tile.turbo:focus-visible{border-color:var(--gold)}
 .tile.sd:hover,.tile.sd:focus-visible{border-color:var(--link)}
-.tile.pass{background:linear-gradient(160deg,#2c1f4a 0,var(--panel) 60%)}
+.tile.pass{background:radial-gradient(90% 90% at 100% 0,rgba(255,210,120,.22),transparent 60%),repeating-linear-gradient(115deg,rgba(255,255,255,.03) 0 2px,transparent 2px 16px),linear-gradient(160deg,#3a2470 0,#1c1533 45%,var(--panel) 80%);border-color:rgba(185,162,245,.45);box-shadow:0 18px 50px -24px rgba(130,80,240,.9)}
 .tile.pass:hover,.tile.pass:focus-visible{border-color:var(--pass)}
 .tile .name{font-family:"Barlow Condensed",sans-serif;font-size:clamp(30px,5vw,48px);
 font-weight:700;font-style:italic;line-height:1}
@@ -772,37 +789,169 @@ font-weight:700;font-style:italic;line-height:1}
 /* Ladder Pass */
 .badge{font-size:12px;font-weight:700;border-radius:3px;padding:1px 6px;margin-left:8px;
 vertical-align:middle;white-space:nowrap}
-.badge.bronze{background:#b07a48;color:#1a1005}.badge.silver{background:#c3ccd2;color:#11181d}
+.badge.bronze{background:#c98a52;color:#1a1005}.badge.silver{background:#c9d3da;color:#11181d}
 .badge.gold{background:var(--gold);color:#1a1405}
-.badge.mythic{background:linear-gradient(90deg,#8d6cf0,#d78cf0);color:#160d26}
+.badge.mythic{background:linear-gradient(90deg,#8d6cf0,#e08cf0);color:#160d26}
 h1 .badge{font-size:16px;padding:3px 9px;margin-left:12px}
-.card.pass{border-color:var(--pass);background:linear-gradient(100deg,rgba(185,162,245,.16),
-var(--panel) 55%)}
-.card.pass h2{color:var(--pass)}
-.bar{height:10px;background:#0c141b;border:1px solid var(--line);border-radius:5px;
-overflow:hidden;margin-top:8px}
-.bar i{display:block;height:100%;background:var(--pass)}
-.bar.done i{background:var(--radiant)}
-.bar.big{height:16px;border-radius:8px}
-.quests,.track{list-style:none;padding:0;margin:0}
-.quests li{padding:12px 0;border-bottom:1px solid var(--line)}
-.quests li:last-child,.track li:last-child{border-bottom:0}
-.quests .row1{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
-.quests .xp{color:var(--pass);font-weight:600;white-space:nowrap}
-.quests .done .xp{color:var(--radiant)}
-.quests .prog{color:var(--dim);font-size:13px;margin-top:3px}
-.track li{display:flex;gap:14px;align-items:center;padding:9px 0;
-border-bottom:1px solid var(--line)}
-.track .lv{font-family:"Barlow Condensed",sans-serif;font-size:22px;font-weight:700;width:58px;flex:none;white-space:nowrap;
-color:var(--dim)}
-.track .got .lv{color:var(--pass)} .track .got .tick{color:var(--radiant)}
-.track .tick{margin-left:auto;color:var(--dim);font-size:14px;white-space:nowrap}
-.featured{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px}
-.ladder .lvl{font-family:"Barlow Condensed",sans-serif;font-size:32px;font-weight:700;
-color:var(--pass)}
-.ladder tr.p1 .lvl{color:var(--gold)}
-.stats .passstat b{color:var(--pass)}
-.title{color:var(--pass);font-style:italic;font-weight:600}
+a.glow{color:#fff;text-shadow:0 0 10px rgba(215,160,255,.9),0 0 22px rgba(160,110,255,.6)}
+.head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;
+margin-bottom:12px}.head h2{margin:0}.head .dim,.head .ok{font-size:14px}
+/* emblem: sexkant i nivåns färg */
+.emblem{--e1:#5b6b77;--e2:#2a3742;--ec:#9fb0bb;--eg:rgba(0,0,0,0);width:120px;aspect-ratio:1;
+flex:none;clip-path:polygon(50% 0,94% 25%,94% 75%,50% 100%,6% 75%,6% 25%);
+background:linear-gradient(160deg,var(--e1),var(--e2));display:grid;place-items:center}
+.emblem .in{width:84%;height:84%;clip-path:inherit;display:flex;flex-direction:column;
+align-items:center;justify-content:center;
+background:radial-gradient(circle at 50% 30%,#2a2142,#0d0b18 75%)}
+.emblem b{font-family:"Barlow Condensed",sans-serif;font-size:52px;line-height:.9;
+font-weight:700;color:var(--ec)}
+.emblem span{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+.emblem.t-bronze{--e1:#f0b47a;--e2:#7a4520;--ec:#f2b27a;--eg:rgba(240,160,90,.45)}
+.emblem.t-silver{--e1:#f2f6f8;--e2:#6f7f8a;--ec:#e4ecf0;--eg:rgba(220,235,245,.4)}
+.emblem.t-gold{--e1:#ffe08a;--e2:#9a6a12;--ec:#ffd36a;--eg:rgba(255,200,80,.55)}
+.emblem.t-mythic{--e1:#f0a8ff;--e2:#5530b8;--ec:#e6b8ff;--eg:rgba(200,130,255,.65)}
+.bp-art{filter:drop-shadow(0 0 22px var(--eg,rgba(0,0,0,0)))}
+.emblem.big{width:150px}.emblem.big b{font-size:64px}
+.emblem.mini{width:38px}.emblem.mini b{font-size:17px}.emblem.mini span{display:none}
+/* banner */
+.bp-hero{position:relative;overflow:hidden;display:flex;gap:28px;align-items:center;
+padding:30px 32px;margin:6px 0 16px;border-radius:14px;border:1px solid rgba(185,162,245,.5);
+background:radial-gradient(110% 140% at 0% 0%,rgba(140,95,245,.55),transparent 55%),
+radial-gradient(80% 120% at 100% 110%,rgba(229,180,80,.35),transparent 60%),
+linear-gradient(135deg,#21143d,#101a24 72%);
+box-shadow:0 24px 70px -28px rgba(130,80,240,.8),inset 0 1px 0 rgba(255,255,255,.08)}
+.bp-hero::before{content:"";position:absolute;inset:0;pointer-events:none;
+background:repeating-linear-gradient(115deg,rgba(255,255,255,.035) 0 2px,transparent 2px 16px)}
+.bp-hero::after{content:"";position:absolute;width:420px;height:420px;right:-140px;top:-200px;
+pointer-events:none;border-radius:50%;
+background:radial-gradient(circle,rgba(255,215,130,.22),transparent 65%)}
+.bp-hero>*{position:relative;z-index:1}
+.bp-art{--eg:rgba(185,140,255,.55)}
+.bp-art:has(.t-bronze){--eg:rgba(240,160,90,.5)}.bp-art:has(.t-silver){--eg:rgba(220,235,245,.45)}
+.bp-art:has(.t-gold){--eg:rgba(255,200,80,.6)}.bp-art:has(.t-mythic){--eg:rgba(210,140,255,.75)}
+.bp-main{flex:1;min-width:0}
+.eyebrow{margin:0 0 4px;font-size:13px;font-weight:600;letter-spacing:.14em;
+text-transform:uppercase;color:#cbbcf7}.eyebrow .left{color:var(--gold)}
+.bp-title{margin:0;font-size:clamp(40px,7vw,66px);line-height:.95;letter-spacing:.01em;
+background:linear-gradient(180deg,#fff7e0 10%,#f0c766 55%,#b9822a 100%);
+-webkit-background-clip:text;background-clip:text;color:transparent;
+filter:drop-shadow(0 2px 0 rgba(0,0,0,.35))}
+.bp-name{margin:6px 0 0;color:#e6b8ff;font-style:italic;font-weight:600;letter-spacing:.04em}
+.bp-lead{margin:10px 0 16px;color:#d9d3ec;max-width:52ch}
+.xpbar{position:relative;height:20px;margin-top:18px;border-radius:10px;overflow:hidden;
+background:#0a0814;border:1px solid rgba(185,162,245,.35);box-shadow:inset 0 2px 6px #000}
+.xpbar i{display:block;height:100%;border-radius:10px;
+background:linear-gradient(90deg,#7a52f0,#c97cf0 55%,#ffd36a);
+box-shadow:0 0 18px rgba(201,124,240,.8)}
+.xpbar::after{content:"";position:absolute;inset:0;
+background:repeating-linear-gradient(90deg,transparent 0 calc(10% - 2px),rgba(0,0,0,.5) calc(10% - 2px) 10%)}
+.xprow{display:flex;justify-content:space-between;margin-top:6px;font-size:14px;color:#cbbcf7}
+.xprow b{color:#fff}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 0}
+.chips span{padding:5px 11px;border-radius:999px;background:rgba(10,8,20,.55);
+border:1px solid rgba(185,162,245,.25);font-size:14px;color:#cbbcf7}.chips b{color:#fff}
+.join{margin-top:16px}
+.cta{display:inline-block;padding:12px 22px;border-radius:8px;font-weight:700;font-size:17px;
+color:#1a1405;border:0;cursor:pointer;background:linear-gradient(180deg,#ffe08a,#e0a83a);
+box-shadow:0 6px 22px -6px rgba(255,200,80,.8),inset 0 1px 0 rgba(255,255,255,.6)}
+.cta:hover{text-decoration:none;filter:brightness(1.08)}
+.ic{width:20px;height:20px;vertical-align:-4px}.ic.sm{width:16px;height:16px}
+/* belöningsbana */
+.bp-track{padding-bottom:12px}
+.lane{list-style:none;margin:0;padding:12px 4px 14px;display:flex;gap:8px;overflow-x:auto;
+scroll-snap-type:x proximity;scrollbar-width:thin;
+-webkit-mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent);
+mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent)}
+.lane:focus-visible{outline:2px solid var(--gold)}
+.tier{position:relative;flex:none;width:62px;height:178px;scroll-snap-align:center;
+display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+padding:26px 8px 16px;border-radius:10px;border:1px solid var(--line);
+background:linear-gradient(180deg,#141f29,#0e161d);text-align:center}
+.tier .lvl{position:absolute;top:6px;left:0;right:0;font-family:"Barlow Condensed",sans-serif;
+font-size:17px;font-weight:700;color:var(--dim)}
+.tier .gem{width:18px;height:18px;transform:rotate(45deg);border-radius:3px;
+background:#2a3642;border:1px solid #3a4a58}
+.tier .st{position:absolute;right:6px;bottom:12px;width:14px;height:14px;color:#55687a}
+.tier.big .st{right:8px;top:8px;bottom:auto}
+.tier .st.ok{color:var(--radiant)}
+.tier .fill{position:absolute;left:0;right:0;bottom:0;height:5px;border-radius:0 0 10px 10px;
+background:#1c2731}
+.tier.big{width:148px;justify-content:flex-start}
+.tier.big b{font-size:15px;line-height:1.15}
+.tier.big small{font-size:12px;line-height:1.25;color:var(--dim)}
+.tier .art{width:92px;height:72px;border-radius:8px;display:grid;place-items:center;flex:none;
+background:radial-gradient(circle at 50% 35%,#2b2346,#120f1e 75%);
+border:1px solid rgba(185,162,245,.25)}
+.tier .art .big{width:40px;height:40px;color:#e6b8ff}
+.tier .art.a-glow .big{color:#fff;filter:drop-shadow(0 0 8px #d7a0ff)}
+.tier .pill{font-family:"Barlow Condensed",sans-serif;font-weight:700;font-size:20px;
+padding:3px 12px;border-radius:5px;transform:rotate(-6deg);box-shadow:0 4px 14px rgba(0,0,0,.5)}
+.pill.bronze{background:linear-gradient(180deg,#f0b47a,#a86a35);color:#1a1005}
+.pill.silver{background:linear-gradient(180deg,#f6f9fb,#9aa9b4);color:#11181d}
+.pill.gold{background:linear-gradient(180deg,#ffe58f,#d09a2c);color:#1a1405}
+.pill.mythic{background:linear-gradient(135deg,#a77af5,#f0a0f0);color:#160d26}
+.tier:not(.got) .art,.tier:not(.got) .gem{filter:grayscale(.85) brightness(.75)}
+.tier.got{border-color:rgba(185,162,245,.45);
+background:linear-gradient(180deg,#221a3a,#120f1e)}
+.tier.got .lvl{color:#e6d9ff}.tier.got .gem{background:linear-gradient(135deg,#b9a2f5,#7a52f0);
+border-color:#d6c8ff;box-shadow:0 0 10px rgba(185,162,245,.8)}
+.tier.got .fill{background:linear-gradient(90deg,#7a52f0,#c97cf0)}
+.tier.now{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold),0 0 22px -4px rgba(229,180,80,.8)}
+.tier.now .lvl{color:var(--gold)}
+.tier.now::before{content:"Next";position:absolute;top:-10px;left:50%;transform:translateX(-50%);
+font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 8px;
+border-radius:999px;background:var(--gold);color:#1a1405}
+/* utvalda hjältar */
+.feats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.feat{position:relative;aspect-ratio:16/9;border-radius:10px;overflow:hidden;
+border:1px solid rgba(229,180,80,.45);
+background:radial-gradient(circle at 30% 20%,#3a2c52,#121a22 70%)}
+.feat img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.feat::after{content:"";position:absolute;inset:0;
+background:linear-gradient(180deg,transparent 40%,rgba(5,8,12,.92))}
+.feat b{position:absolute;left:12px;bottom:9px;z-index:1;font-family:"Barlow Condensed",sans-serif;
+font-size:22px;font-weight:700;font-style:italic;text-shadow:0 2px 6px #000}
+.feat .rib{position:absolute;top:8px;left:8px;z-index:1;font-size:11px;font-weight:700;
+letter-spacing:.08em;text-transform:uppercase;padding:2px 8px;border-radius:4px;
+background:var(--gold);color:#1a1405}
+/* uppdrag */
+.qgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.qcard{position:relative;display:flex;gap:14px;align-items:flex-start;padding:14px;
+border-radius:10px;border:1px solid var(--line);background:linear-gradient(180deg,#17242f,#111b23)}
+.qic{flex:none;width:44px;height:44px;border-radius:10px;display:grid;place-items:center;
+background:linear-gradient(135deg,#3b2d66,#1d1736);color:#d9c8ff;
+box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.qic .ic{width:24px;height:24px}
+.q-utvald .qic,.q-guld .qic{background:linear-gradient(135deg,#6b4a12,#2c1f08);color:#ffd36a}
+.q-svit .qic,.q-kills .qic{background:linear-gradient(135deg,#6a2618,#2a110c);color:#ff9a7a}
+.q-rena .qic,.q-assists .qic{background:linear-gradient(135deg,#17504a,#0b2522);color:#8be6c9}
+.qbody{flex:1;min-width:0}
+.qtop{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.qt{font-weight:600;line-height:1.3}
+.xp{flex:none;font-size:13px;font-weight:700;padding:2px 8px;border-radius:999px;
+background:rgba(185,162,245,.16);color:#d9c8ff}
+.qbar{height:8px;margin-top:10px;border-radius:4px;background:#0a0f14;overflow:hidden}
+.qbar i{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,#7a52f0,#c97cf0)}
+.qnum{margin-top:4px;font-size:13px;color:var(--dim)}
+.qcard.done{border-color:rgba(229,180,80,.6);
+background:linear-gradient(180deg,rgba(229,180,80,.12),#111b23 70%)}
+.qcard.done .qbar i{background:linear-gradient(90deg,#e0a83a,#ffe08a)}
+.qcard.done .xp{background:var(--gold);color:#1a1405}
+.stamp{position:absolute;right:12px;bottom:10px;font-size:11px;font-weight:800;
+letter-spacing:.12em;text-transform:uppercase;color:var(--gold);border:2px solid var(--gold);
+border-radius:4px;padding:0 6px;transform:rotate(-8deg);opacity:.9}
+/* topplista */
+.whocell{display:inline-flex;align-items:center;gap:12px}
+.ttl{display:block;font-size:12px;color:#e6b8ff;font-style:italic}
+.ladder .xpcol{font-family:"Barlow Condensed",sans-serif;font-size:28px;font-weight:700;
+color:#d9c8ff;font-variant-numeric:tabular-nums}
+.ladder tr.p1 .xpcol{color:var(--gold)}
+@media(max-width:560px){.bp-hero{flex-direction:column;align-items:flex-start;gap:16px;
+padding:22px 18px}.emblem.big{width:110px}.emblem.big b{font-size:46px}
+.feats{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.feat b{font-size:15px;left:7px}
+.feat .rib{display:none}.qgrid{grid-template-columns:1fr}.ladder .xpcol{font-size:22px}}
+@media(prefers-reduced-motion:no-preference){.xpbar i{animation:fyll 1.1s ease-out}
+@keyframes fyll{from{width:0}}}
 .tile .what{margin-top:10px;font-size:17px}
 .tile .count{margin-top:6px;color:var(--dim);font-size:14px}
 @media(prefers-reduced-motion:reduce){.tile{transition:none}.tile:hover{transform:none}}
@@ -978,9 +1127,12 @@ def sida_hem(c, månad, läge, fel=""):
         kal = ("" if rankad else "<span class='tag'>calibrating</span>" if s["n"]
                else "<span class='tag'>no matches yet</span>")
         ikoner = "".join(hjälte_html(hj, h, med_namn=False) for h in mest_spelade(s["matcher"]))
+        nivå = pass_nivå(c, pid, månad)          # None = inte med i passet
+        glöd = " class='glow'" if nivå is not None and nivå >= GLÖD_NIVÅ else ""
         rader += (f"<tr class='{klass}'><td class='pos'>{i}</td>"
-                  f"<td class='who'><a href='/{läge}/player/{pid}{fråga}'>{html.escape(namn)}</a>"
-                  f"{pass_märke(c, pid, månad)}{kal}</td>"
+                  f"<td class='who'><a{glöd} href='/{läge}/player/{pid}{fråga}'>"
+                  f"{html.escape(namn)}</a>"
+                  f"{märke_html(nivå) if nivå is not None else ''}{kal}</td>"
                   f"<td class='heroes hide-s'>{ikoner}</td>"
                   f"<td class='mmr r'>{s['rating']}</td><td class='r'>{s['n']}</td>"
                   f"<td class='r'>{s['v']}-{s['f']}</td><td class='r hide-s'>{s['wr']}%</td></tr>")
@@ -1315,88 +1467,188 @@ def sida_match(c, pid, mid, läge):
 
 
 # ---------- Ladder Pass-sidor ----------
-def uppdrag_html(c, månad, status=None):
-    """Månadens uppdrag. Med status visas spelarens framsteg på varje uppdrag."""
+# Enkla ikoner (SVG, 24x24) till uppdragen och belöningarna. Färgen kommer från CSS.
+_IKON = {
+    "utvald": "<path d='M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z'/>",
+    "spela": "<path d='M7 4.5v15l12.5-7.5z'/>",
+    "turbo": "<path d='M13.5 2L4 14h7l-1.5 8L20 10h-7z'/>",
+    "sd": ("<rect x='3.5' y='3.5' width='17' height='17' rx='3.5' fill='none' "
+           "stroke='currentColor' stroke-width='2'/><circle cx='8.5' cy='8.5' r='1.7'/>"
+           "<circle cx='15.5' cy='15.5' r='1.7'/><circle cx='15.5' cy='8.5' r='1.7'/>"
+           "<circle cx='8.5' cy='15.5' r='1.7'/>"),
+    "kills": ("<path d='M12 2.5c-4.7 0-8 3.2-8 7.6 0 2.6 1.2 4.4 3 5.5V19a1.5 1.5 0 0 0 1.5 "
+              "1.5h7A1.5 1.5 0 0 0 17 19v-3.4c1.8-1.1 3-2.9 3-5.5 0-4.4-3.3-7.6-8-7.6z"
+              "M8.8 9a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6.4 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4z'/>"),
+    "assists": ("<circle cx='8' cy='8' r='3.2'/><circle cx='16.5' cy='9' r='2.7'/>"
+                "<path d='M2 19.5c0-3.6 2.7-6 6-6s6 2.4 6 6zM13.6 19.5c.1-2.3-.6-4-1.8-5.2 "
+                "1.2-.8 2.6-1.2 4.7-1.2 3 0 5.5 2.1 5.5 6.4z'/>"),
+    "rena": "<path d='M12 2l8 3v6.2c0 5-3.4 9-8 10.8-4.6-1.8-8-5.8-8-10.8V5z'/>",
+    "hjältar": ("<rect x='3' y='3' width='8' height='8' rx='2'/><rect x='13' y='3' width='8' "
+                "height='8' rx='2'/><rect x='3' y='13' width='8' height='8' rx='2'/>"
+                "<rect x='13' y='13' width='8' height='8' rx='2'/>"),
+    "svit": ("<path d='M12 2c1 3.6 5.5 5.7 5.5 11a5.5 5.5 0 0 1-11 0c0-2.4 1-4.2 2.4-5.6.2 "
+             "1.8 1 3 2.3 3.6C10.6 8.3 11 5 12 2z'/>"),
+    "guld": ("<circle cx='12' cy='12' r='9.5'/><circle cx='12' cy='12' r='6' fill='none' "
+             "stroke='rgba(0,0,0,.35)' stroke-width='1.6'/>"),
+    "kda": "<path d='M12 2.5l2.9 6 6.6.8-4.9 4.6 1.3 6.6L12 17.2l-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8z'/>",
+    "title": ("<path d='M6 3h12a2 2 0 0 1 2 2v13l-3-1.8L14 18l-2-1.6L10 18l-3-1.8L4 18V5a2 2 0 "
+              "0 1 2-2z'/><path d='M8 8h8M8 11.5h6' stroke='rgba(0,0,0,.4)' stroke-width='1.6'/>"),
+    "glow": ("<path d='M12 1.5l1.8 6.2 6.2 1.8-6.2 1.8L12 17.5l-1.8-6.2L4 9.5l6.2-1.8z'/>"
+             "<path d='M19 15l.9 2.6 2.6.9-2.6.9L19 22l-.9-2.6-2.6-.9 2.6-.9z'/>"),
+    "lås": ("<rect x='5' y='10.5' width='14' height='10' rx='2'/><path d='M8 10.5V8a4 4 0 0 1 8 "
+            "0v2.5' fill='none' stroke='currentColor' stroke-width='2.2'/>"),
+    "bock": "<path d='M4.5 12.5l4.5 4.5L19.5 6.5' fill='none' stroke='currentColor' stroke-width='3'/>",
+}
+
+
+def ikon(namn, klass="ic"):
+    return (f"<svg class='{klass}' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'>"
+            f"{_IKON.get(namn, _IKON['kda'])}</svg>")
+
+
+def emblem_html(nivå, klass=""):
+    """Sexkantigt nivåemblem i nivåns färg (brons, silver, guld, mythic)."""
+    return (f"<div class='emblem t-{nivåklass(nivå)} {klass}' role='img' "
+            f"aria-label='Level {nivå}'><div class='in'><b>{nivå}</b><span>Level</span>"
+            f"</div></div>")
+
+
+def dagar_kvar(månad):
+    """'12 days left' för innevarande månad, annars 'Season ended'."""
+    if månad != nu_månad():
+        return "Season ended"
+    kvar = max(0, månadsgränser(månad)[1] - time.time())
+    if kvar < 86400:
+        return f"{max(1, int(kvar // 3600))} hours left"
+    dagar = int(-(-kvar // 86400))
+    return f"{dagar} day{'s' if dagar != 1 else ''} left"
+
+
+def banner_html(månad, s=None, namn=None, knapp="", fel=""):
+    """Stora bannern överst: emblem, säsong, nivå och XP-stapel."""
+    säsong = (f"<p class='eyebrow'>Season &middot; {månadsnamn(månad)} &middot; "
+              f"<span class='left'>{dagar_kvar(månad)}</span></p>")
+    if s is None:           # inte inloggad: visa passet utan egen nivå
+        return (f"<section class='bp-hero'><div class='bp-art'>{emblem_html(0, 'big')}</div>"
+                f"<div class='bp-main'>{säsong}<h1 class='bp-title'>{PASS_NAMN}</h1>"
+                f"<p class='bp-lead'>Free for everyone. Every Turbo and Single Draft match "
+                f"gives XP, quests give more, and every level unlocks something.</p>"
+                f"<a class='cta' href='/login?next=/pass'>Sign in through Steam to start</a>"
+                f"{ruta(fel, 'err')}<p class='note'>Turn on \"Expose Public Match Data\" in "
+                f"Dota first.</p></div></section>")
+    in_i_nivå = s["xp"] % NIVÅ_XP
+    procent = round(100 * in_i_nivå / NIVÅ_XP)
+    t = titel(s["nivå"])
+    rubrik = (f"<h1 class='bp-title'>{html.escape(namn)}</h1>" if namn
+              else f"<h1 class='bp-title'>{PASS_NAMN}</h1>")
+    return (f"<section class='bp-hero'><div class='bp-art'>{emblem_html(s['nivå'], 'big')}"
+            f"</div><div class='bp-main'>{säsong}{rubrik}"
+            f"{'<p class=bp-name>' + html.escape(t) + '</p>' if t else ''}"
+            f"<div class='xpbar' role='progressbar' aria-valuemin='0' aria-valuemax='{NIVÅ_XP}' "
+            f"aria-valuenow='{in_i_nivå}' aria-label='XP toward level {s['nivå'] + 1}'>"
+            f"<i style='width:{procent}%'></i></div>"
+            f"<div class='xprow'><span>Level {s['nivå']} &rarr; {s['nivå'] + 1}</span>"
+            f"<span><b>{in_i_nivå}</b> / {NIVÅ_XP} XP</span></div>"
+            f"<div class='chips'><span><b>{s['xp']}</b> total XP</span>"
+            f"<span><b>{s['klara']}/{len(s['uppdrag'])}</b> quests</span>"
+            f"<span><b>{s['n']}</b> matches</span></div>"
+            f"{knapp}{ruta(fel, 'err')}</div></section>")
+
+
+def spår_html(nivå=None):
+    """Belöningsbanan: en ruta per nivå, stora rutor där det finns en belöning."""
+    belöning = {lv: (sort, namn, text) for lv, sort, namn, text in BELÖNINGAR}
+    rutor = ""
+    for lv in range(1, PASS_MAXNIVÅ + 1):
+        fått = nivå is not None and nivå >= lv
+        nu = nivå is not None and lv == nivå + 1          # nästa nivå att nå
+        klass = ("got " if fått else "") + ("now " if nu else "")
+        status = (ikon("bock", "st ok") if fått else ikon("lås", "st"))
+        if lv in belöning:
+            sort, namn, text = belöning[lv]
+            bild = (f"<div class='art a-{sort}'>"
+                    + (f"<span class='pill {sort}'>Lv {lv}</span>" if sort in
+                       ("bronze", "silver", "gold", "mythic") else ikon(sort, "big"))
+                    + "</div>")
+            rutor += (f"<li class='tier big {klass}'><span class='lvl'>{lv}</span>{bild}"
+                      f"<b>{html.escape(namn)}</b><small>{html.escape(text)}</small>"
+                      f"{status}<span class='fill'></span></li>")
+        else:
+            rutor += (f"<li class='tier {klass}'><span class='lvl'>{lv}</span>"
+                      f"<div class='gem'></div>{status}<span class='fill'></span></li>")
+    mål = ""
+    if nivå is not None:
+        nästa = next(((lv, n) for lv, _, n, _ in BELÖNINGAR if lv > nivå), None)
+        mål = (f"<span class='dim'>Next reward: <b>{html.escape(nästa[1])}</b> at level "
+               f"{nästa[0]}</span>" if nästa else "<span class='ok'>Every reward unlocked!</span>")
+    return (f"<section class='card bp-track'><div class='head'><h2>Rewards</h2>{mål}</div>"
+            f"<ol class='lane' tabindex='0' aria-label='Reward track'>{rutor}</ol>"
+            f"<p class='note'>Swipe or scroll sideways. Badges and titles live on this site and "
+            f"last for the month.</p></section>"
+            # Rulla banan så att nästa nivå syns, utan att flytta sidan i höjdled.
+            f"<script>(function(){{var l=document.querySelector('.lane'),n=l&&l.querySelector"
+            f"('.now');if(n)l.scrollLeft=n.offsetLeft-l.clientWidth/2+n.offsetWidth/2;}})();"
+            f"</script>")
+
+
+def utvalda_html(c, månad):
+    """Månadens utvalda hjältar som stora porträtt."""
     hj = hjältar(c)
+    kort = ""
+    for h in pass_hjältar(c, månad):
+        namn, img, _ = hj.get(h, (f"Hero {h}", "", ""))
+        bild = (f"<img src='{BILDER}{html.escape(img)}' alt='' loading='lazy' "
+                f"onerror=\"this.remove()\">" if img else "")
+        kort += (f"<div class='feat'>{bild}<span class='rib'>Featured</span>"
+                 f"<b>{html.escape(namn)}</b></div>")
+    if not kort:
+        kort = "<p class='dim'>Not picked yet: the hero list is still loading.</p>"
+    xp, _, text = UPPDRAG["utvald"]
+    return (f"<section class='card'><div class='head'><h2>Featured heroes</h2>"
+            f"<span class='dim'>Wins with them count toward a +{xp} XP quest</span></div>"
+            f"<div class='feats'>{kort}</div></section>")
+
+
+def uppdrag_html(månad, status=None):
+    """Månadens uppdrag som kort. Med status visas spelarens framsteg."""
     lista = status["uppdrag"] if status else pass_uppdrag(månad)
-    rader = ""
+    kort = ""
     for u in lista:
         text = html.escape(UPPDRAG[u["typ"]][2].format(n=u["n"]))
+        klar = bool(status and u["klar"])
+        framsteg = ""
         if status:
-            klar = u["klar"]
             procent = round(100 * u["framsteg"] / u["n"])
-            rader += (f"<li class='{'done' if klar else ''}'><div class='row1'><span>{text}</span>"
-                      f"<span class='xp'>{'&#10003; ' if klar else ''}+{u['xp']} XP</span></div>"
-                      f"<div class='bar {'done' if klar else ''}' role='progressbar' "
-                      f"aria-valuemin='0' aria-valuemax='{u['n']}' aria-valuenow='{u['framsteg']}' "
-                      f"aria-label='{text}'><i style='width:{procent}%'></i></div>"
-                      f"<div class='prog'>{u['framsteg']} / {u['n']}"
-                      f"{' &middot; completed' if klar else ''}</div></li>")
-        else:
-            rader += (f"<li><div class='row1'><span>{text}</span>"
-                      f"<span class='xp'>+{u['xp']} XP</span></div></li>")
-    utvalda = pass_hjältar(c, månad)
-    hjältetext = ("".join(hjälte_html(hj, h) for h in utvalda) if utvalda
-                  else "<span class='dim'>Not picked yet: the hero list is still loading.</span>")
-    return (f"<div class='card'><h2>Quests for {månadsnamn(månad)}</h2>"
-            f"<ul class='quests'>{rader}</ul>"
-            f"<p class='note'>Featured heroes this month:</p><div class='featured'>{hjältetext}"
-            f"</div><p class='note'>Quests count Turbo and Single Draft matches from the whole "
-            f"month. Every match also gives XP: +{XP_VINST} for a win, +{XP_FÖRLUST} for a "
-            f"loss.</p></div>")
-
-
-def belöningar_html(nivå=None):
-    """Belöningsstegen. Med nivå markeras det som redan är upplåst."""
-    rader = ""
-    for lv, text in BELÖNINGAR:
-        fått = nivå is not None and nivå >= lv
-        if fått:
-            bock = "Unlocked"
-        elif nivå is not None:
-            bock = f"{lv - nivå} level{'s' if lv - nivå != 1 else ''} to go"
-        else:
-            bock = ""
-        rader += (f"<li class='{'got' if fått else ''}'><span class='lv'>Lv {lv}</span>"
-                  f"<span>{html.escape(text)}</span>"
-                  f"<span class='tick'>{'&#10003; ' if fått else ''}{bock}</span></li>")
-    return (f"<div class='card'><h2>Rewards</h2><ul class='track'>{rader}</ul>"
-            f"<p class='note'>Badges and titles live on this site and last for the month. "
-            f"Levels reset on the 1st, like the ladders.</p></div>")
-
-
-def nivå_html(s):
-    """Nivå, XP och stapel mot nästa nivå."""
-    in_i_nivå = s["xp"] % NIVÅ_XP
-    return (f"<div class='stats'><div class='passstat'><b>{s['nivå']}</b><span>level</span></div>"
-            f"<div><b>{s['xp']}</b><span>XP</span></div>"
-            f"<div><b>{s['klara']}/{len(s['uppdrag'])}</b><span>quests done</span></div>"
-            f"<div><b>{s['n']}</b><span>matches</span></div></div>"
-            f"<div class='bar big' role='progressbar' aria-valuemin='0' "
-            f"aria-valuemax='{NIVÅ_XP}' aria-valuenow='{in_i_nivå}' "
-            f"aria-label='XP toward level {s['nivå'] + 1}'>"
-            f"<i style='width:{round(100 * in_i_nivå / NIVÅ_XP)}%'></i></div>"
-            f"<p class='note'>{in_i_nivå} / {NIVÅ_XP} XP toward level {s['nivå'] + 1}. "
-            f"{s['match_xp']} XP from matches, {s['uppdrag_xp']} XP from quests.</p>")
+            framsteg = (f"<div class='qbar' role='progressbar' aria-valuemin='0' "
+                        f"aria-valuemax='{u['n']}' aria-valuenow='{u['framsteg']}' "
+                        f"aria-label='{text}'><i style='width:{procent}%'></i></div>"
+                        f"<div class='qnum'>{u['framsteg']} / {u['n']}</div>")
+        kort += (f"<div class='qcard q-{u['typ']} {'done' if klar else ''}'>"
+                 f"<div class='qic'>{ikon(u['typ'])}</div><div class='qbody'>"
+                 f"<div class='qtop'><span class='qt'>{text}</span>"
+                 f"<span class='xp'>+{u['xp']} XP</span></div>{framsteg}</div>"
+                 f"{'<span class=stamp>Complete</span>' if klar else ''}</div>")
+    return (f"<section class='card'><div class='head'><h2>Quests</h2><span class='dim'>"
+            f"+{XP_VINST} XP per win, +{XP_FÖRLUST} per loss on top</span></div>"
+            f"<div class='qgrid'>{kort}</div></section>")
 
 
 def pass_knapp(c, pid):
     """Gå med i eller lämna passet för innevarande månad (bara för spelaren själv)."""
     nu = pass_anmälan(c, pid, nu_månad())
-    post = f"<form class='row' method='post' action='/pass/list/{pid}'>"
-    denna = månadsnamn(nu_månad())
+    post = f"<form class='row join' method='post' action='/pass/list/{pid}'>"
     if nu:
-        return (f"{post}<input type='hidden' name='listed' value='0'><span class='ok'>You are "
-                f"in the {PASS_NAMN} for {denna}.</span> "
-                f"<button class='quiet'>Leave the pass</button></form>")
-    return (f"{post}<input type='hidden' name='listed' value='1'><span class='dim'>"
-            f"{'You left' if nu is False else 'Not in'} the {PASS_NAMN} for {denna}. "
-            f"Join to show up on the pass leaderboard and get your badge.</span> "
-            f"<button>Join the pass</button></form>")
+        return (f"{post}<input type='hidden' name='listed' value='0'><span class='ok'>"
+                f"{ikon('bock', 'ic sm')} You are in the pass</span>"
+                f"<button class='quiet'>Leave</button></form>")
+    return (f"{post}<input type='hidden' name='listed' value='1'>"
+            f"<button class='cta'>{'Rejoin' if nu is False else 'Join'} the pass, free</button>"
+            f"<span class='dim'>Join to get your badge and a place on the leaderboard."
+            f"</span></form>")
 
 
-def sida_pass(c, månad, fel=""):
-    """Passets startsida: pris, din nivå, uppdrag, belöningar och topplistan."""
+def pass_topplista(c, månad):
+    """(rader-html, ledarens namn eller None) för passets topplista."""
     fråga = "" if månad == nu_månad() else f"?month={månad}"
     stat = [(pid, namn, pass_status(c, pid, månad)) for pid, namn in c.execute(
         "SELECT p.id,p.name FROM players p JOIN entries e ON e.player_id=p.id "
@@ -1405,91 +1657,79 @@ def sida_pass(c, månad, fel=""):
     rader = ""
     for i, (pid, namn, s) in enumerate(stat, 1):
         klass = f"p{i}" if i <= 3 and s["xp"] else ""
+        glöd = " class='glow'" if s["nivå"] >= GLÖD_NIVÅ else ""
+        t = titel(s["nivå"])
         rader += (f"<tr class='{klass}'><td class='pos'>{i}</td>"
-                  f"<td class='who'><a href='/pass/player/{pid}{fråga}'>{html.escape(namn)}</a>"
-                  f"{märke_html(s['nivå'])}</td><td class='lvl r'>{s['nivå']}</td>"
-                  f"<td class='r'>{s['xp']}</td><td class='r hide-s'>{s['klara']}/"
+                  f"<td class='who'><span class='whocell'>{emblem_html(s['nivå'], 'mini')}"
+                  f"<span><a{glöd} href='/pass/player/{pid}{fråga}'>{html.escape(namn)}</a>"
+                  f"{'<small class=ttl>' + t + '</small>' if t else ''}</span></span></td>"
+                  f"<td class='r xpcol'>{s['xp']}</td><td class='r hide-s'>{s['klara']}/"
                   f"{len(s['uppdrag'])}</td><td class='r hide-s'>{s['n']}</td></tr>")
     if not rader:
-        rader = (f"<tr><td colspan=6 class='dim wide'>Nobody has joined the {PASS_NAMN} for "
+        rader = (f"<tr><td colspan=5 class='dim wide'>Nobody has joined the {PASS_NAMN} for "
                  f"{månadsnamn(månad)} yet.</td></tr>")
+    ledare = stat[0][1] if stat and stat[0][2]["xp"] else None
+    return rader, ledare
 
+
+def sida_pass(c, månad, fel=""):
+    """Passets startsida: banner, belöningsbana, utvalda hjältar, uppdrag och topplista."""
     jag = inloggad()
     finns = jag and c.execute("SELECT 1 FROM players WHERE id=?", (jag,)).fetchone()
-    if finns:
-        s = pass_status(c, jag, månad)
-        knapp = pass_knapp(c, jag) if månad == nu_månad() else ""
-        t = titel(s["nivå"])
-        egen = (f"<div class='card pass'><h2>Your pass{märke_html(s['nivå'])}</h2>"
-                f"{'<p class=title>' + t + '</p>' if t else ''}{nivå_html(s)}{knapp}"
-                f"{ruta(fel, 'err')}<p class='note'><a href='/pass/player/{jag}{fråga}'>See your "
-                f"quest progress</a></p></div>")
-        uppdrag = uppdrag_html(c, månad, s)
-        belöning = belöningar_html(s["nivå"])
-    else:
-        egen = (f"<div class='card pass'><h2>Join the {PASS_NAMN}</h2>"
-                f"<p><a class='steam big' href='/login?next=/pass'>Sign in through Steam</a></p>"
-                f"{ruta(fel, 'err')}<p class='note'>It is free. Sign in, join the pass and play "
-                f"Turbo or Single Draft as usual. Turn on \"Expose Public Match Data\" in Dota "
-                f"first.</p></div>")
-        uppdrag = uppdrag_html(c, månad)
-        belöning = belöningar_html()
-
-    ledare = (f"Right now that is <b>{html.escape(stat[0][1])}</b>."
-              if stat and stat[0][2]["xp"] else "Nobody has any XP yet.")
+    s = pass_status(c, jag, månad) if finns else None
+    knapp = pass_knapp(c, jag) if finns and månad == nu_månad() else ""
+    rader, ledare = pass_topplista(c, månad)
+    leder = (f"Right now that is <b>{html.escape(ledare)}</b>." if ledare
+             else "Nobody has any XP yet.")
     pris = (f"<div class='prize'><img src='{PASS_PRIS_BILD}' alt='' width='96' height='96' "
             f"onerror=\"this.style.display='none'\"><div><h2>1st prize</h2>"
             f"<p class='what'>{html.escape(PASS_PRIS_TEXT)}</p><p class='note'>"
-            + (f"Whoever has the most pass XP when {månadsnamn(månad)} ends wins it. {ledare}"
+            + (f"Most pass XP when {månadsnamn(månad)} ends wins it. {leder}"
                if månad == nu_månad() else
                f"It went to whoever had the most pass XP in {månadsnamn(månad)}.")
             + "</p></div></div>")
-
+    egen = (f"<p class='note'><a href='/pass/player/{jag}"
+            f"{'' if månad == nu_månad() else '?month=' + månad}'>Open your pass page</a></p>"
+            if finns else "")
     return sida(PASS_NAMN, f"""
-<h1>{PASS_NAMN}</h1>
 {månadsväljare(månad, '/pass')}
-<p class='sub'>A free monthly pass for both ladders. Every Turbo and Single Draft match gives
-XP, quests give more, and every {NIVÅ_XP} XP is a new level with badges and titles to
-unlock. Everyone starts over on the 1st.</p>
-{pris}
+{banner_html(månad, s, knapp=knapp, fel=fel)}
 {egen}
-<div class='card wrap'><h2>Pass leaderboard</h2>
-<table class='ladder'><tr><th>#</th><th>Player</th><th class='r'>Level</th>
-<th class='r'>XP</th><th class='r hide-s'>Quests</th><th class='r hide-s'>Matches</th></tr>
-{rader}</table></div>
-{uppdrag}
-{belöning}""", "pass", "/pass")
+{spår_html(s['nivå'] if s else None)}
+{utvalda_html(c, månad)}
+{uppdrag_html(månad, s)}
+{pris}
+<section class='card wrap'><div class='head'><h2>Pass leaderboard</h2></div>
+<table class='ladder'><tr><th>#</th><th>Player</th><th class='r'>XP</th>
+<th class='r hide-s'>Quests</th><th class='r hide-s'>Matches</th></tr>
+{rader}</table></section>""", "pass", "/pass")
 
 
 def sida_pass_spelare(c, pid, månad):
-    """En spelares pass: nivå, uppdrag med framsteg och belöningar."""
+    """En spelares pass: banner med nivå, belöningsbana och uppdrag med framsteg."""
     p = c.execute("SELECT name,updated FROM players WHERE id=?", (pid,)).fetchone()
     if not p:
         return None
     fråga = "" if månad == nu_månad() else f"?month={månad}"
     s = pass_status(c, pid, månad)
-    min_sida = inloggad() == pid
-    med = pass_anmälan(c, pid, nu_månad())
-    if min_sida:
-        knapp = pass_knapp(c, pid)
-    elif med:
-        knapp = f"<span class='ok'>In the {PASS_NAMN} for {månadsnamn(nu_månad())}.</span>"
+    if inloggad() == pid:
+        knapp = pass_knapp(c, pid) if månad == nu_månad() else ""
+    elif pass_anmälan(c, pid, nu_månad()):
+        knapp = f"<p class='ok'>In the {PASS_NAMN} for {månadsnamn(nu_månad())}.</p>"
     else:
-        knapp = f"<span class='dim'>Not in the {PASS_NAMN} for {månadsnamn(nu_månad())}.</span>"
-    t = titel(s["nivå"])
+        knapp = f"<p class='dim'>Not in the {PASS_NAMN} for {månadsnamn(nu_månad())}.</p>"
     tid = time.strftime("%Y-%m-%d %H:%M", time.localtime(p[1])) if p[1] else "never"
     profil = " &middot; ".join(f"<a href='/{k}/player/{pid}{fråga}'>{v[1]} profile</a>"
                                for k, v in LÄGEN.items())
     return sida(f"{p[0]} in the {PASS_NAMN}", f"""
 <a class='back' href='/pass{fråga}'>Back to the {PASS_NAMN}</a>
-<h1>{html.escape(p[0])}{märke_html(s['nivå']) if pass_anmälan(c, pid, månad) else ''}</h1>
-{f"<p class='title'>{t}</p>" if t else ''}
 {månadsväljare(månad, f'/pass/player/{pid}')}
-<div class='card pass'>{nivå_html(s)}{knapp}
+{banner_html(månad, s, p[0], knapp)}
 <p class='note'>Last updated {tid}. New matches are fetched automatically when someone opens
-the page. {profil}</p></div>
-{uppdrag_html(c, månad, s)}
-{belöningar_html(s['nivå'])}""", "pass", f"/pass/player/{pid}")
+the page. {profil}</p>
+{spår_html(s['nivå'])}
+{uppdrag_html(månad, s)}
+{utvalda_html(c, månad)}""", "pass", f"/pass/player/{pid}")
 
 
 # ---------- server ----------
