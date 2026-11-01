@@ -124,8 +124,18 @@ BELÖNINGAR = [(1, "bronze", "Bronze badge", "Next to your name on the ladders")
               (30, "title", "Relentless", "Title on your pass profile")]
 PASS_MAXNIVÅ = 30           # så många nivåer visas på belöningsbanan
 GLÖD_NIVÅ = 25              # från den här nivån lyser namnet på stegarna
+# Champion track: en andra rad på belöningsbanan som låses upp när man har klarat
+# alla månadens uppdrag. Belöningarna gäller sedan från respektive nivå.
+MÄSTAR_BELÖNINGAR = [(3, "crown", "Champion crown", "A crown next to your name on the ladders"),
+                     (8, "frame", "Champion frame", "A golden ring around your level emblem"),
+                     (14, "title", "Questmaster", "Champion title on your pass profile"),
+                     (20, "shine", "Shining badge", "Your ladder badge shimmers"),
+                     (30, "title", "Pass Legend", "The rarest title on the site")]
+KRONA_NIVÅ, RAM_NIVÅ, GLANS_NIVÅ = 3, 8, 20     # när champion-effekterna slår till
 MÄRKEN = [(20, "mythic"), (10, "gold"), (5, "silver"), (1, "bronze")]   # (från nivå, klass)
-TITLAR = [(30, "Relentless"), (15, "Seasoned")]
+# Titlar, den första som spelaren uppfyller visas: (nivå, kräver champion, titel).
+TITLAR = [(30, True, "Pass Legend"), (30, False, "Relentless"), (14, True, "Questmaster"),
+          (15, False, "Seasoned")]
 # Pris till den som har mest XP när månaden slutar. Byt text eller bild här.
 PASS_PRIS_TEXT = PRIS_TEXT
 PASS_PRIS_BILD = PRIS_BILD
@@ -198,6 +208,9 @@ def db():
               "time INTEGER)")
     # pass_heroes = passets utvalda hjältar för månaden, som JSON-lista.
     c.execute("CREATE TABLE IF NOT EXISTS pass_heroes(month TEXT PRIMARY KEY, heroes TEXT)")
+    # pass_seen = vilken nivå spelaren senast såg på sin passida (för nivå-upp-animationen).
+    c.execute("CREATE TABLE IF NOT EXISTS pass_seen(player_id INTEGER, month TEXT, "
+              "level INTEGER, champion INTEGER, PRIMARY KEY(player_id, month))")
     # sessions = inloggningar. Bara en hash av kakans värde sparas, aldrig värdet självt.
     c.execute("CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, "
               "player_id INTEGER, expires INTEGER)")
@@ -705,22 +718,23 @@ def pass_status(c, pid, månad):
     match_xp = sum(XP_VINST if m["win"] else XP_FÖRLUST for m in ms)
     uppdrag_xp = sum(u["xp"] for u in uppdrag if u["klar"])
     xp = match_xp + uppdrag_xp
+    klara = sum(u["klar"] for u in uppdrag)
     return {"xp": xp, "nivå": xp // NIVÅ_XP, "match_xp": match_xp, "uppdrag_xp": uppdrag_xp,
-            "uppdrag": uppdrag, "klara": sum(u["klar"] for u in uppdrag), "n": len(ms),
-            "v": sum(m["win"] for m in ms)}
+            "uppdrag": uppdrag, "klara": klara, "n": len(ms),
+            "v": sum(m["win"] for m in ms), "mästare": klara == len(uppdrag)}
 
 
-def märke_html(nivå):
-    """Passmärket för en nivå, eller '' under nivå 1."""
+def märke_html(nivå, glans=False):
+    """Passmärket för en nivå, eller '' under nivå 1. glans = champion-märket som skimrar."""
     klass = next((k for från, k in MÄRKEN if nivå >= från), None)
     if not klass:
         return ""
-    return (f"<span class='badge {klass}' title='{PASS_NAMN} level {nivå}'>"
-            f"Lv {nivå}</span>")
+    return (f"<span class='badge {klass}{' shine' if glans else ''}' "
+            f"title='{PASS_NAMN} level {nivå}'>Lv {nivå}</span>")
 
 
-def titel(nivå):
-    return next((t for från, t in TITLAR if nivå >= från), "")
+def titel(nivå, mästare=False):
+    return next((t for från, krav, t in TITLAR if nivå >= från and (mästare or not krav)), "")
 
 
 def nivåklass(nivå):
@@ -728,17 +742,42 @@ def nivåklass(nivå):
     return next((k for från, k in MÄRKEN if nivå >= från), "none")
 
 
-def pass_nivå(c, pid, månad):
-    """Spelarens passnivå, eller None om hen inte är med i passet den månaden."""
+def har(s, nivå):
+    """Har spelaren låst upp champion-belöningen på den nivån?"""
+    return bool(s and s["mästare"] and s["nivå"] >= nivå)
+
+
+def krona_html():
+    return ("<svg class='crown' viewBox='0 0 24 24' fill='currentColor' role='img' "
+            "aria-label='Champion'><title>Champion: completed every quest</title>"
+            "<path d='M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z'/></svg>")
+
+
+def namn_html(s, namn, href):
+    """Spelarens namn med passets utsmyckning: lysande namn, märke och krona.
+    s = pass_status, eller None om spelaren inte är med i passet."""
+    if s is None:
+        return f"<a href='{href}'>{html.escape(namn)}</a>"
+    glöd = " class='glow'" if s["nivå"] >= GLÖD_NIVÅ else ""
+    return (f"<a{glöd} href='{href}'>{html.escape(namn)}</a>"
+            f"{krona_html() if har(s, KRONA_NIVÅ) else ''}"
+            f"{märke_html(s['nivå'], har(s, GLANS_NIVÅ))}")
+
+
+def pass_info(c, pid, månad):
+    """pass_status för spelaren, eller None om hen inte är med i passet den månaden."""
     if not pass_anmälan(c, pid, månad):
         return None
-    return pass_status(c, pid, månad)["nivå"]
+    return pass_status(c, pid, månad)
 
 
 def pass_märke(c, pid, månad):
-    """Märket som visas bredvid namnet på stegarna, bara för spelare med i passet."""
-    nivå = pass_nivå(c, pid, månad)
-    return märke_html(nivå) if nivå is not None else ""
+    """Märket (och kronan) som visas bredvid namnet, bara för spelare med i passet."""
+    s = pass_info(c, pid, månad)
+    if s is None:
+        return ""
+    return (f"{krona_html() if har(s, KRONA_NIVÅ) else ''}"
+            f"{märke_html(s['nivå'], har(s, GLANS_NIVÅ))}")
 
 
 # ---------- sidor ----------
@@ -856,51 +895,134 @@ color:#1a1405;border:0;cursor:pointer;background:linear-gradient(180deg,#ffe08a,
 box-shadow:0 6px 22px -6px rgba(255,200,80,.8),inset 0 1px 0 rgba(255,255,255,.6)}
 .cta:hover{text-decoration:none;filter:brightness(1.08)}
 .ic{width:20px;height:20px;vertical-align:-4px}.ic.sm{width:16px;height:16px}
-/* belöningsbana */
+/* belöningsbana: en kolumn per nivå, gratis rad överst och champion-rad under */
 .bp-track{padding-bottom:12px}
-.lane{list-style:none;margin:0;padding:12px 4px 14px;display:flex;gap:8px;overflow-x:auto;
+.lane{list-style:none;margin:0;padding:14px 4px 14px 0;display:flex;gap:8px;overflow-x:auto;
 scroll-snap-type:x proximity;scrollbar-width:thin;
--webkit-mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent);
-mask-image:linear-gradient(90deg,transparent,#000 24px,#000 calc(100% - 24px),transparent)}
+-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent);
+mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}
 .lane:focus-visible{outline:2px solid var(--gold)}
-.tier{position:relative;flex:none;width:62px;height:178px;scroll-snap-align:center;
-display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
-padding:26px 8px 16px;border-radius:10px;border:1px solid var(--line);
-background:linear-gradient(180deg,#141f29,#0e161d);text-align:center}
-.tier .lvl{position:absolute;top:6px;left:0;right:0;font-family:"Barlow Condensed",sans-serif;
-font-size:17px;font-weight:700;color:var(--dim)}
-.tier .gem{width:18px;height:18px;transform:rotate(45deg);border-radius:3px;
+.labels{position:sticky;left:0;z-index:3;flex:none;width:30px;display:flex;flex-direction:column;
+gap:8px;padding-top:30px;background:var(--panel)}
+.labels span{flex:1;writing-mode:vertical-rl;transform:rotate(180deg);text-align:center;
+font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;border-radius:6px}
+.labels .lf{color:#cbbcf7;background:rgba(185,162,245,.12);height:150px;flex:none}
+.labels .lc{color:var(--gold);background:rgba(229,180,80,.14);height:150px;flex:none}
+.col{position:relative;flex:none;width:62px;display:flex;flex-direction:column;gap:8px;
+padding-top:30px;scroll-snap-align:center}
+.col.big{width:148px}
+.col .lvl{position:absolute;top:0;left:0;right:0;height:24px;display:grid;place-items:center;
+font-family:"Barlow Condensed",sans-serif;font-size:17px;font-weight:700;color:var(--dim);
+border-radius:6px;background:#0c141b}
+.col.got .lvl{color:#fff;background:linear-gradient(90deg,#5b3cc4,#8d5ee0)}
+.col.now .lvl{color:#1a1405;background:var(--gold);box-shadow:0 0 16px -2px rgba(229,180,80,.9)}
+.cell{position:relative;height:150px;display:flex;flex-direction:column;align-items:center;
+justify-content:center;gap:6px;padding:10px 8px;border-radius:10px;text-align:center;
+border:1px solid var(--line);background:linear-gradient(180deg,#141f29,#0e161d)}
+.col.big .cell{justify-content:flex-start}.col.big .cell.empty{justify-content:center}
+.cell b{font-size:14px;line-height:1.15}
+.cell small{font-size:11.5px;line-height:1.25;color:var(--dim)}
+.cell .gem{width:16px;height:16px;transform:rotate(45deg);border-radius:3px;
 background:#2a3642;border:1px solid #3a4a58}
-.tier .st{position:absolute;right:6px;bottom:12px;width:14px;height:14px;color:#55687a}
-.tier.big .st{right:8px;top:8px;bottom:auto}
-.tier .st.ok{color:var(--radiant)}
-.tier .fill{position:absolute;left:0;right:0;bottom:0;height:5px;border-radius:0 0 10px 10px;
-background:#1c2731}
-.tier.big{width:148px;justify-content:flex-start}
-.tier.big b{font-size:15px;line-height:1.15}
-.tier.big small{font-size:12px;line-height:1.25;color:var(--dim)}
-.tier .art{width:92px;height:72px;border-radius:8px;display:grid;place-items:center;flex:none;
+.cell .st{position:absolute;right:6px;bottom:6px;width:13px;height:13px;color:#55687a}
+.col.big .cell .st{top:7px;bottom:auto}
+.cell .st.ok{color:var(--radiant)}
+.cell .art{width:88px;height:62px;border-radius:8px;display:grid;place-items:center;flex:none;
 background:radial-gradient(circle at 50% 35%,#2b2346,#120f1e 75%);
 border:1px solid rgba(185,162,245,.25)}
-.tier .art .big{width:40px;height:40px;color:#e6b8ff}
-.tier .art.a-glow .big{color:#fff;filter:drop-shadow(0 0 8px #d7a0ff)}
-.tier .pill{font-family:"Barlow Condensed",sans-serif;font-weight:700;font-size:20px;
-padding:3px 12px;border-radius:5px;transform:rotate(-6deg);box-shadow:0 4px 14px rgba(0,0,0,.5)}
+.cell .art .big{width:36px;height:36px;color:#e6b8ff}
+.cell .art.a-glow .big{color:#fff;filter:drop-shadow(0 0 8px #d7a0ff)}
+.cell .pill{font-family:"Barlow Condensed",sans-serif;font-weight:700;font-size:19px;
+padding:3px 11px;border-radius:5px;transform:rotate(-6deg);box-shadow:0 4px 14px rgba(0,0,0,.5)}
 .pill.bronze{background:linear-gradient(180deg,#f0b47a,#a86a35);color:#1a1005}
 .pill.silver{background:linear-gradient(180deg,#f6f9fb,#9aa9b4);color:#11181d}
 .pill.gold{background:linear-gradient(180deg,#ffe58f,#d09a2c);color:#1a1405}
 .pill.mythic{background:linear-gradient(135deg,#a77af5,#f0a0f0);color:#160d26}
-.tier:not(.got) .art,.tier:not(.got) .gem{filter:grayscale(.85) brightness(.75)}
-.tier.got{border-color:rgba(185,162,245,.45);
-background:linear-gradient(180deg,#221a3a,#120f1e)}
-.tier.got .lvl{color:#e6d9ff}.tier.got .gem{background:linear-gradient(135deg,#b9a2f5,#7a52f0);
-border-color:#d6c8ff;box-shadow:0 0 10px rgba(185,162,245,.8)}
-.tier.got .fill{background:linear-gradient(90deg,#7a52f0,#c97cf0)}
-.tier.now{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold),0 0 22px -4px rgba(229,180,80,.8)}
-.tier.now .lvl{color:var(--gold)}
-.tier.now::before{content:"Next";position:absolute;top:-10px;left:50%;transform:translateX(-50%);
-font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:1px 8px;
-border-radius:999px;background:var(--gold);color:#1a1405}
+.cell:not(.got) .art,.cell:not(.got) .gem{filter:grayscale(.85) brightness(.7)}
+.cell.free.got{border-color:rgba(185,162,245,.5);background:linear-gradient(180deg,#241a3e,#120f1e)}
+.cell.free.got .gem{background:linear-gradient(135deg,#b9a2f5,#7a52f0);border-color:#d6c8ff;
+box-shadow:0 0 10px rgba(185,162,245,.8)}
+.cell.champ{border-color:rgba(229,180,80,.22);
+background:linear-gradient(180deg,rgba(229,180,80,.07),#0e161d)}
+.cell.champ .art{border-color:rgba(229,180,80,.3);
+background:radial-gradient(circle at 50% 35%,#3d2f12,#151008 75%)}
+.cell.champ .art .big{color:#ffd36a}
+.cell.champ:not(.got) .st{color:#8a6a2c}
+.cell.champ.got{border-color:var(--gold);
+background:linear-gradient(180deg,rgba(229,180,80,.26),#1a140a);
+box-shadow:inset 0 0 18px rgba(229,180,80,.18)}
+.cell.champ.got .gem{background:linear-gradient(135deg,#ffe08a,#c98b20);border-color:#ffe9a8;
+box-shadow:0 0 10px rgba(255,200,80,.8)}
+.col .fill{height:5px;border-radius:3px;background:#1c2731}
+.col.got .fill{background:linear-gradient(90deg,#7a52f0,#c97cf0)}
+.col.now{filter:drop-shadow(0 0 12px rgba(229,180,80,.35))}
+.champbar{display:flex;gap:10px;align-items:center;padding:10px 14px;margin:0 0 4px;
+border-radius:8px;border:1px dashed rgba(229,180,80,.45);color:#e8d6a8;font-size:14px;
+background:rgba(229,180,80,.06)}
+.champbar .ic,.champbar .crown{flex:none;color:var(--gold)}
+.champbar.open{border-style:solid;border-color:var(--gold);
+background:linear-gradient(90deg,rgba(229,180,80,.22),rgba(229,180,80,.04))}
+/* champion: krona, skimrande märke, guldram */
+.crown{width:18px;height:18px;margin-left:7px;vertical-align:-3px;color:var(--gold);
+filter:drop-shadow(0 0 6px rgba(255,200,80,.7))}
+.champbar .crown{margin:0;width:22px;height:22px}
+.chips .champ{border-color:var(--gold);color:var(--gold);font-weight:700}
+.chips .champ .crown{margin:0 2px 0 0;width:15px;height:15px}
+.badge.shine{position:relative;overflow:hidden}
+.badge.shine::after{content:"";position:absolute;inset:0;transform:translateX(-120%);
+background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,.85) 50%,transparent 70%);
+animation:glans 2.6s ease-in-out infinite}
+@keyframes glans{60%,100%{transform:translateX(120%)}}
+.hexring{position:relative;flex:none;display:grid;place-items:center;padding:10px;overflow:hidden;
+clip-path:polygon(50% 0,94% 25%,94% 75%,50% 100%,6% 75%,6% 25%)}
+.hexring::before{content:"";position:absolute;inset:-40%;
+background:conic-gradient(#fff2c0,#e0a83a,#7a4a10,#ffe08a,#fff2c0);animation:snurr 4s linear infinite}
+.hexring::after{content:"";position:absolute;inset:5px;background:#0b0912;
+clip-path:polygon(50% 0,94% 25%,94% 75%,50% 100%,6% 75%,6% 25%)}
+.hexring .emblem{position:relative;z-index:1}
+.hexring.mini{padding:5px}.hexring.mini::after{inset:2.5px}
+@keyframes snurr{to{transform:rotate(1turn)}}
+.bp-hero.is-champ{border-color:rgba(229,180,80,.7)}
+/* nivå-upp */
+.lvlup{position:fixed;inset:0;z-index:50;display:grid;place-items:center;overflow:hidden;
+background:radial-gradient(circle at 50% 45%,rgba(60,30,120,.97),rgba(5,6,12,.99) 70%);
+animation:tona .35s ease-out}
+.lvlup.bye{animation:tonaut .35s ease-in forwards}
+@keyframes tona{from{opacity:0}}@keyframes tonaut{to{opacity:0}}
+.lvlup .rays{position:absolute;width:160vmax;height:160vmax;left:50%;top:45%;
+margin:-80vmax 0 0 -80vmax;opacity:.35;animation:snurr 24s linear infinite;
+background:repeating-conic-gradient(rgba(255,215,130,.5) 0 6deg,transparent 6deg 18deg);
+-webkit-mask-image:radial-gradient(circle,#000 0,transparent 45%);
+mask-image:radial-gradient(circle,#000 0,transparent 45%)}
+.lvlup .box{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;
+text-align:center;padding:24px;max-width:420px}
+.lvlup .box>.emblem,.lvlup .box>.hexring{animation:popp .9s cubic-bezier(.2,1.6,.4,1) .15s both;
+filter:drop-shadow(0 0 40px rgba(255,200,90,.7))}
+@keyframes popp{from{transform:scale(.2) rotate(-25deg);opacity:0}}
+.lvlup h2{margin:18px 0 0;font-family:"Barlow Condensed",sans-serif;font-size:62px;
+font-style:italic;font-weight:700;line-height:1;color:transparent;
+background:linear-gradient(180deg,#fff7e0 10%,#f0c766 55%,#b9822a);
+-webkit-background-clip:text;background-clip:text;animation:upp .6s ease-out .55s both}
+.lvlup .box>p,.lvlup ul,.lvlup .cta{animation:upp .6s ease-out .75s both}
+@keyframes upp{from{opacity:0;transform:translateY(14px)}}
+.lvlup p{margin:6px 0 0;color:#ddd3f5;font-size:18px}
+.lvlup .unl{margin-top:18px;font-size:12px;font-weight:700;letter-spacing:.16em;
+text-transform:uppercase;color:var(--gold)}
+.lvlup ul{list-style:none;padding:0;margin:8px 0 22px;display:flex;flex-direction:column;gap:6px}
+.lvlup li{padding:7px 14px;border-radius:8px;background:rgba(229,180,80,.12);
+border:1px solid rgba(229,180,80,.4);font-weight:600}
+.lvlup li .ic{color:var(--radiant)}
+.lvlup .cta{margin-top:18px}
+@media(max-width:560px){.lvlup h2{font-size:48px}}.lvlup ul+.cta{margin-top:0}
+.sparks{position:absolute;left:50%;top:42%;z-index:1}
+.sparks i{position:absolute;width:var(--s);height:var(--s);border-radius:2px;
+background:linear-gradient(135deg,#fff3c4,#e0a83a);transform:rotate(45deg);opacity:0;
+animation:gnista 1.6s ease-out var(--d) forwards}
+.sparks i:nth-child(3n){background:linear-gradient(135deg,#f0d0ff,#9a6cf0)}
+@keyframes gnista{0%{opacity:1;transform:translate(0,0) rotate(45deg) scale(.4)}
+80%{opacity:1}100%{opacity:0;transform:translate(var(--x),var(--y)) rotate(225deg) scale(1)}}
+@media(prefers-reduced-motion:reduce){.lvlup *,.lvlup,.hexring::before,.badge.shine::after{
+animation:none!important}.sparks{display:none}}
 /* utvalda hjältar */
 .feats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .feat{position:relative;aspect-ratio:16/9;border-radius:10px;overflow:hidden;
@@ -1127,12 +1249,9 @@ def sida_hem(c, månad, läge, fel=""):
         kal = ("" if rankad else "<span class='tag'>calibrating</span>" if s["n"]
                else "<span class='tag'>no matches yet</span>")
         ikoner = "".join(hjälte_html(hj, h, med_namn=False) for h in mest_spelade(s["matcher"]))
-        nivå = pass_nivå(c, pid, månad)          # None = inte med i passet
-        glöd = " class='glow'" if nivå is not None and nivå >= GLÖD_NIVÅ else ""
+        namn_länk = namn_html(pass_info(c, pid, månad), namn, f"/{läge}/player/{pid}{fråga}")
         rader += (f"<tr class='{klass}'><td class='pos'>{i}</td>"
-                  f"<td class='who'><a{glöd} href='/{läge}/player/{pid}{fråga}'>"
-                  f"{html.escape(namn)}</a>"
-                  f"{märke_html(nivå) if nivå is not None else ''}{kal}</td>"
+                  f"<td class='who'>{namn_länk}{kal}</td>"
                   f"<td class='heroes hide-s'>{ikoner}</td>"
                   f"<td class='mmr r'>{s['rating']}</td><td class='r'>{s['n']}</td>"
                   f"<td class='r'>{s['v']}-{s['f']}</td><td class='r hide-s'>{s['wr']}%</td></tr>")
@@ -1506,11 +1625,13 @@ def ikon(namn, klass="ic"):
             f"{_IKON.get(namn, _IKON['kda'])}</svg>")
 
 
-def emblem_html(nivå, klass=""):
-    """Sexkantigt nivåemblem i nivåns färg (brons, silver, guld, mythic)."""
-    return (f"<div class='emblem t-{nivåklass(nivå)} {klass}' role='img' "
-            f"aria-label='Level {nivå}'><div class='in'><b>{nivå}</b><span>Level</span>"
-            f"</div></div>")
+def emblem_html(nivå, klass="", ram=False):
+    """Sexkantigt nivåemblem i nivåns färg (brons, silver, guld, mythic).
+    ram = champion-ramen: en roterande guldring runt emblemet."""
+    emblem = (f"<div class='emblem t-{nivåklass(nivå)} {klass}' role='img' "
+              f"aria-label='Level {nivå}'><div class='in'><b>{nivå}</b><span>Level</span>"
+              f"</div></div>")
+    return f"<div class='hexring {klass}'>{emblem}</div>" if ram else emblem
 
 
 def dagar_kvar(månad):
@@ -1538,10 +1659,13 @@ def banner_html(månad, s=None, namn=None, knapp="", fel=""):
                 f"Dota first.</p></div></section>")
     in_i_nivå = s["xp"] % NIVÅ_XP
     procent = round(100 * in_i_nivå / NIVÅ_XP)
-    t = titel(s["nivå"])
+    t = titel(s["nivå"], s["mästare"])
     rubrik = (f"<h1 class='bp-title'>{html.escape(namn)}</h1>" if namn
               else f"<h1 class='bp-title'>{PASS_NAMN}</h1>")
-    return (f"<section class='bp-hero'><div class='bp-art'>{emblem_html(s['nivå'], 'big')}"
+    mästare = (f"<span class='champ'>{krona_html()} Champion</span>" if s["mästare"] else
+               f"<span><b>{s['klara']}/{len(s['uppdrag'])}</b> quests</span>")
+    return (f"<section class='bp-hero {'is-champ' if s['mästare'] else ''}'><div class='bp-art'>"
+            f"{emblem_html(s['nivå'], 'big', har(s, RAM_NIVÅ))}"
             f"</div><div class='bp-main'>{säsong}{rubrik}"
             f"{'<p class=bp-name>' + html.escape(t) + '</p>' if t else ''}"
             f"<div class='xpbar' role='progressbar' aria-valuemin='0' aria-valuemax='{NIVÅ_XP}' "
@@ -1549,46 +1673,118 @@ def banner_html(månad, s=None, namn=None, knapp="", fel=""):
             f"<i style='width:{procent}%'></i></div>"
             f"<div class='xprow'><span>Level {s['nivå']} &rarr; {s['nivå'] + 1}</span>"
             f"<span><b>{in_i_nivå}</b> / {NIVÅ_XP} XP</span></div>"
-            f"<div class='chips'><span><b>{s['xp']}</b> total XP</span>"
-            f"<span><b>{s['klara']}/{len(s['uppdrag'])}</b> quests</span>"
+            f"<div class='chips'><span><b>{s['xp']}</b> total XP</span>{mästare}"
             f"<span><b>{s['n']}</b> matches</span></div>"
             f"{knapp}{ruta(fel, 'err')}</div></section>")
 
 
-def spår_html(nivå=None):
-    """Belöningsbanan: en ruta per nivå, stora rutor där det finns en belöning."""
-    belöning = {lv: (sort, namn, text) for lv, sort, namn, text in BELÖNINGAR}
-    rutor = ""
+def _belöningsbild(sort, lv):
+    """Bilden i en belöningsruta: ett märke eller en ikon."""
+    if sort in ("bronze", "silver", "gold", "mythic"):
+        return f"<div class='art a-{sort}'><span class='pill {sort}'>Lv {lv}</span></div>"
+    if sort == "shine":
+        return "<div class='art a-shine'><span class='pill gold shine'>Lv 20</span></div>"
+    if sort == "frame":
+        return f"<div class='art a-frame'>{emblem_html(lv, 'mini', ram=True)}</div>"
+    if sort == "crown":
+        return f"<div class='art a-crown'>{ikon('utvald', 'big')}</div>"
+    return f"<div class='art a-{sort}'>{ikon(sort, 'big')}</div>"
+
+
+def spår_html(s=None):
+    """Belöningsbanan: en kolumn per nivå med en gratis rad och en champion-rad.
+    s = spelarens pass_status, eller None när ingen är inloggad."""
+    nivå = s["nivå"] if s else None
+    mästare = bool(s and s["mästare"])
+    gratis = {lv: (sort, n, t) for lv, sort, n, t in BELÖNINGAR}
+    extra = {lv: (sort, n, t) for lv, sort, n, t in MÄSTAR_BELÖNINGAR}
+
+    def cell(rad, lv, belöning, öppen):
+        fått = öppen and nivå is not None and nivå >= lv
+        status = ikon("bock", "st ok") if fått else ikon("lås", "st")
+        if not belöning:
+            return (f"<div class='cell {rad} empty {'got' if fått else ''}'><div class='gem'></div>"
+                    f"{status}</div>")
+        sort, namn, text = belöning
+        return (f"<div class='cell {rad} {'got' if fått else ''}'>{_belöningsbild(sort, lv)}"
+                f"<b>{html.escape(namn)}</b><small>{html.escape(text)}</small>{status}</div>")
+
+    kolumner = ("<li class='labels' aria-hidden='true'><span class='lf'>Free</span>"
+                "<span class='lc'>Champion</span></li>")
     for lv in range(1, PASS_MAXNIVÅ + 1):
-        fått = nivå is not None and nivå >= lv
-        nu = nivå is not None and lv == nivå + 1          # nästa nivå att nå
-        klass = ("got " if fått else "") + ("now " if nu else "")
-        status = (ikon("bock", "st ok") if fått else ikon("lås", "st"))
-        if lv in belöning:
-            sort, namn, text = belöning[lv]
-            bild = (f"<div class='art a-{sort}'>"
-                    + (f"<span class='pill {sort}'>Lv {lv}</span>" if sort in
-                       ("bronze", "silver", "gold", "mythic") else ikon(sort, "big"))
-                    + "</div>")
-            rutor += (f"<li class='tier big {klass}'><span class='lvl'>{lv}</span>{bild}"
-                      f"<b>{html.escape(namn)}</b><small>{html.escape(text)}</small>"
-                      f"{status}<span class='fill'></span></li>")
-        else:
-            rutor += (f"<li class='tier {klass}'><span class='lvl'>{lv}</span>"
-                      f"<div class='gem'></div>{status}<span class='fill'></span></li>")
+        stor = lv in gratis or lv in extra
+        klass = ("big " if stor else "") + ("got " if nivå is not None and nivå >= lv else "") + \
+                ("now" if nivå is not None and lv == nivå + 1 else "")
+        kolumner += (f"<li class='col {klass}'><span class='lvl'>{lv}</span>"
+                     f"{cell('free', lv, gratis.get(lv), True)}"
+                     f"{cell('champ', lv, extra.get(lv), mästare)}<span class='fill'></span></li>")
+
     mål = ""
     if nivå is not None:
-        nästa = next(((lv, n) for lv, _, n, _ in BELÖNINGAR if lv > nivå), None)
+        alla = sorted([(lv, n) for lv, _, n, _ in BELÖNINGAR] +
+                      ([(lv, n) for lv, _, n, _ in MÄSTAR_BELÖNINGAR] if mästare else []))
+        nästa = next(((lv, n) for lv, n in alla if lv > nivå), None)
         mål = (f"<span class='dim'>Next reward: <b>{html.escape(nästa[1])}</b> at level "
                f"{nästa[0]}</span>" if nästa else "<span class='ok'>Every reward unlocked!</span>")
-    return (f"<section class='card bp-track'><div class='head'><h2>Rewards</h2>{mål}</div>"
-            f"<ol class='lane' tabindex='0' aria-label='Reward track'>{rutor}</ol>"
-            f"<p class='note'>Swipe or scroll sideways. Badges and titles live on this site and "
-            f"last for the month.</p></section>"
+    if mästare:
+        lås = (f"<div class='champbar open'>{krona_html()}<span><b>Champion track unlocked.</b> "
+               f"You completed every quest this month, so the gold row is yours too.</span></div>")
+    else:
+        klara = f" You have {s['klara']} of {len(s['uppdrag'])}." if s else ""
+        lås = (f"<div class='champbar'>{ikon('lås', 'ic')}<span><b>Champion track:</b> complete "
+               f"all {PASS_UPPDRAG} quests this month to unlock the gold row.{klara}</span></div>")
+    return (f"<section class='card bp-track'><div class='head'><h2>Rewards</h2>{mål}</div>{lås}"
+            f"<ol class='lane' tabindex='0' aria-label='Reward track'>{kolumner}</ol>"
+            f"<p class='note'>Swipe or scroll sideways. Rewards live on this site and last for "
+            f"the month.</p></section>"
             # Rulla banan så att nästa nivå syns, utan att flytta sidan i höjdled.
             f"<script>(function(){{var l=document.querySelector('.lane'),n=l&&l.querySelector"
             f"('.now');if(n)l.scrollLeft=n.offsetLeft-l.clientWidth/2+n.offsetWidth/2;}})();"
             f"</script>")
+
+
+def nivåupp_html(c, pid, månad, s):
+    """Nivå-upp-animationen: visas när spelaren öppnar sitt pass och har gått upp i nivå
+    (eller låst upp champion-raden) sedan förra besöket. Första besöket visar ingenting."""
+    if månad != nu_månad():
+        return ""
+    rad = c.execute("SELECT level,champion FROM pass_seen WHERE player_id=? AND month=?",
+                    (pid, månad)).fetchone()
+    c.execute("INSERT OR REPLACE INTO pass_seen VALUES(?,?,?,?)",
+              (pid, månad, s["nivå"], int(s["mästare"])))
+    c.commit()
+    if not rad:
+        return ""
+    gammal, var_mästare = rad
+    ny_mästare = s["mästare"] and not var_mästare
+    if s["nivå"] <= gammal and not ny_mästare:
+        return ""
+    # Belöningar som blivit upplåsta sedan förra besöket.
+    nya = [n for lv, _, n, _ in BELÖNINGAR if gammal < lv <= s["nivå"]]
+    if s["mästare"]:
+        nya += [n for lv, _, n, _ in MÄSTAR_BELÖNINGAR
+                if lv <= s["nivå"] and (ny_mästare or lv > gammal)]
+    rubrik = "Level up!" if s["nivå"] > gammal else "Champion!"
+    under = (f"You reached level {s['nivå']}" if s["nivå"] > gammal
+             else "You completed every quest this month")
+    if ny_mästare and s["nivå"] > gammal:
+        under += " and unlocked the Champion track"
+    lista = "".join(f"<li>{ikon('bock', 'ic sm')} {html.escape(n)}</li>" for n in nya)
+    rng = random.Random(pid)
+    gnistor = "".join(
+        f"<i style='--x:{rng.randint(-260, 260)}px;--y:{rng.randint(-220, 200)}px;"
+        f"--d:{rng.randint(0, 400)}ms;--s:{rng.randint(5, 11)}px'></i>" for _ in range(28))
+    return (f"<div class='lvlup' id='lvlup' role='dialog' aria-modal='true' "
+            f"aria-labelledby='lvlup-t'><div class='rays'></div><div class='sparks'>{gnistor}"
+            f"</div><div class='box'>{emblem_html(s['nivå'], 'big', har(s, RAM_NIVÅ))}"
+            f"<h2 id='lvlup-t'>{rubrik}</h2><p>{under}.</p>"
+            + (f"<p class='unl'>Unlocked</p><ul>{lista}</ul>" if lista else "")
+            + "<button class='cta' id='lvlup-ok'>Continue</button></div></div>"
+            "<script>(function(){var d=document.getElementById('lvlup'),b=document."
+            "getElementById('lvlup-ok');function stang(){d.classList.add('bye');"
+            "setTimeout(function(){d.remove()},350)}b.focus();b.onclick=stang;"
+            "d.onclick=function(e){if(e.target===d)stang()};document.addEventListener("
+            "'keydown',function(e){if(e.key==='Escape')stang()})})();</script>")
 
 
 def utvalda_html(c, månad):
@@ -1658,10 +1854,12 @@ def pass_topplista(c, månad):
     for i, (pid, namn, s) in enumerate(stat, 1):
         klass = f"p{i}" if i <= 3 and s["xp"] else ""
         glöd = " class='glow'" if s["nivå"] >= GLÖD_NIVÅ else ""
-        t = titel(s["nivå"])
+        t = titel(s["nivå"], s["mästare"])
+        krona = krona_html() if har(s, KRONA_NIVÅ) else ""
         rader += (f"<tr class='{klass}'><td class='pos'>{i}</td>"
-                  f"<td class='who'><span class='whocell'>{emblem_html(s['nivå'], 'mini')}"
-                  f"<span><a{glöd} href='/pass/player/{pid}{fråga}'>{html.escape(namn)}</a>"
+                  f"<td class='who'><span class='whocell'>"
+                  f"{emblem_html(s['nivå'], 'mini', har(s, RAM_NIVÅ))}"
+                  f"<span><a{glöd} href='/pass/player/{pid}{fråga}'>{html.escape(namn)}</a>{krona}"
                   f"{'<small class=ttl>' + t + '</small>' if t else ''}</span></span></td>"
                   f"<td class='r xpcol'>{s['xp']}</td><td class='r hide-s'>{s['klara']}/"
                   f"{len(s['uppdrag'])}</td><td class='r hide-s'>{s['n']}</td></tr>")
@@ -1691,11 +1889,12 @@ def sida_pass(c, månad, fel=""):
     egen = (f"<p class='note'><a href='/pass/player/{jag}"
             f"{'' if månad == nu_månad() else '?month=' + månad}'>Open your pass page</a></p>"
             if finns else "")
-    return sida(PASS_NAMN, f"""
+    upp = nivåupp_html(c, jag, månad, s) if finns else ""
+    return sida(PASS_NAMN, f"""{upp}
 {månadsväljare(månad, '/pass')}
 {banner_html(månad, s, knapp=knapp, fel=fel)}
 {egen}
-{spår_html(s['nivå'] if s else None)}
+{spår_html(s)}
 {utvalda_html(c, månad)}
 {uppdrag_html(månad, s)}
 {pris}
@@ -1721,13 +1920,14 @@ def sida_pass_spelare(c, pid, månad):
     tid = time.strftime("%Y-%m-%d %H:%M", time.localtime(p[1])) if p[1] else "never"
     profil = " &middot; ".join(f"<a href='/{k}/player/{pid}{fråga}'>{v[1]} profile</a>"
                                for k, v in LÄGEN.items())
-    return sida(f"{p[0]} in the {PASS_NAMN}", f"""
+    upp = nivåupp_html(c, pid, månad, s) if inloggad() == pid else ""
+    return sida(f"{p[0]} in the {PASS_NAMN}", f"""{upp}
 <a class='back' href='/pass{fråga}'>Back to the {PASS_NAMN}</a>
 {månadsväljare(månad, f'/pass/player/{pid}')}
 {banner_html(månad, s, p[0], knapp)}
 <p class='note'>Last updated {tid}. New matches are fetched automatically when someone opens
 the page. {profil}</p>
-{spår_html(s['nivå'])}
+{spår_html(s)}
 {uppdrag_html(månad, s)}
 {utvalda_html(c, månad)}""", "pass", f"/pass/player/{pid}")
 
