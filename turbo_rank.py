@@ -44,6 +44,22 @@ FÖRSÖK = 3          # antal försök vid 429 / tillfälliga fel
 MAX_VÄNTAN = 20     # väntar aldrig längre än så (sekunder) på ett nytt försök
 
 
+# Antal anrop mot OpenDota under innevarande dygn (UTC), för att hålla gratisgränsen.
+_anrop = {"dag": "", "n": 0}
+
+
+def anrop_idag():
+    """Hur många anrop som har gjorts mot OpenDota i dag (UTC)."""
+    return _anrop["n"] if _anrop["dag"] == time.strftime("%Y-%m-%d", time.gmtime()) else 0
+
+
+def _räkna_anrop():
+    dag = time.strftime("%Y-%m-%d", time.gmtime())
+    if _anrop["dag"] != dag:
+        _anrop.update(dag=dag, n=0)
+    _anrop["n"] += 1
+
+
 class ApiFel(Exception):
     """Fel med ett meddelande som går att visa direkt för användaren."""
 
@@ -67,6 +83,7 @@ def hämta_json(sökväg):
                                  headers={"User-Agent": "turbo-rank-prototyp"})
     for försök in range(1, FÖRSÖK + 1):
         sista = försök == FÖRSÖK
+        _räkna_anrop()              # även nya försök räknas mot gratisgränsen
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.load(r)
@@ -157,6 +174,20 @@ def hämta_matcher(account_id, game_mode):
     if not isinstance(matcher, list):
         raise ApiFel("OpenDota sent an unexpected response.")
     return matcher
+
+
+def hämta_alla_matcher(account_id, game_modes, dagar=None):
+    """Matcherna i flera spellägen med ett enda anrop (i stället för ett per läge).
+    dagar = hämta bara matcher från de senaste dagarna (mindre svar), None = alla.
+    Saknar svaret game_mode görs ett anrop per läge som förr."""
+    matcher = hämta_json(f"/players/{account_id}/matches?significant=0"
+                         + (f"&date={int(dagar)}" if dagar else ""))
+    if not isinstance(matcher, list):
+        raise ApiFel("OpenDota sent an unexpected response.")
+    if matcher and any("game_mode" not in m for m in matcher):
+        return [dict(m, game_mode=läge) for läge in game_modes
+                for m in hämta_matcher(account_id, läge)]
+    return [m for m in matcher if m.get("game_mode") in game_modes]
 
 
 def inga_matcher_fel(account_id, vad="Turbo"):
