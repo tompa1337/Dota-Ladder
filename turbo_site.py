@@ -32,7 +32,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 from turbo_rank import (ASSIST_VIKT, FÖRVÄNTAN_VIKT, GULD_BONUS, GULD_MAX, GULD_STREAK, K, KDA_MAX, KDA_NORMAL, SINGLE_DRAFT,
                         START, TURBO, guldbonus, hämta_profil, motståndarnivå, rank_namn, ApiFel, förklara, giltig,
-                        hämta_json, hämta_matcher, inga_matcher_fel, månad_för,
+                        hämta_json, hämta_alla_matcher, anrop_idag, inga_matcher_fel, månad_för,
                         månadsgränser, tolka_id, vann, STEAM64_BAS)
 
 # TURBO_DB pekar ut databasfilen på en server (en mapp som sparas mellan omstarter).
@@ -58,10 +58,11 @@ SESSION_DAGAR = 30          # så länge gäller en inloggning
 # Automatisk uppdatering: när någon öppnar en sida hämtas nya matcher i bakgrunden
 # för de spelare sidan visar, om deras data är äldre än så här (sekunder).
 FÄRSK_PROFIL = 10 * 60      # spelaren vars profil öppnas
-FÄRSK_LISTA = 30 * 60       # anmälda spelare när menyn eller en topplista öppnas
+FÄRSK_LISTA = 30 * 60       # anmälda spelare när menyn eller en topplista öppnas (minst)
 MELLANRUM = 3               # sekunders paus mellan två spelare (OpenDota: ca 60 anrop/minut)
 DYGNSBUDGET = 1500          # högst så många anrop per dygn i bakgrunden (gratisgräns 2000)
-ANROP_PER_SPELARE = 3       # två spellägen + profilen
+ANROP_PER_SPELARE = 2       # högst: matcherna (ett anrop för båda lägena) + ibland profilen
+PROFIL_ÅLDER = 24 * 3600    # namn och rank hämtas om högst en gång per dygn
 VILA_EFTER_FEL = 5 * 60     # paus i bakgrundsuppdateringen efter ett fel från OpenDota
 # Bestämd första guldhjälte för en viss spelare en viss månad: (Steam32-ID, månad) -> hjälte-id.
 # Resten av ordningen är slumpad som vanligt. 32 = Riki.
@@ -249,6 +250,10 @@ def db():
     # listed användes förr (en topplista för alla lägen) och läses inte längre.
     # listed = 1 när spelaren har valt att synas på topplistan.
     # Äldre databaser saknar kolumnen, så den läggs till vid behov.
+    # profile_fetched = när namn och rank senast hämtades (de hämtas om en gång per dygn).
+    if "profile_fetched" not in [r[1] for r in c.execute("PRAGMA table_info(players)")]:
+        c.execute("ALTER TABLE players ADD COLUMN profile_fetched INTEGER")
+        c.commit()
     if "listed" not in [r[1] for r in c.execute("PRAGMA table_info(players)")]:
         c.execute("ALTER TABLE players ADD COLUMN listed INTEGER NOT NULL DEFAULT 0")
         c.commit()
@@ -337,21 +342,33 @@ def uppdatera_spelare(c, pid):
         kvar = int(PAUS - (time.time() - gammal[1])) + 1
         raise ApiFel(f"This player was just updated. Try again in {kvar} seconds.")
 
-    rader = []
-    for game_mode, _, _ in LÄGEN.values():          # ett anrop per spelläge
-        rader += [(pid, m["match_id"], m["start_time"], int(vann(m)), m.get("hero_id"),
-                   m.get("kills"), m.get("deaths"), m.get("assists"), game_mode,
-                   m.get("average_rank"))
-                  for m in hämta_matcher(pid, game_mode) if giltig(m)]
-    if not rader:
+    # Har spelaren redan matcher räcker det att hämta dagarna sedan förra uppdateringen
+    # (plus marginal). Första gången hämtas hela historiken. Ett anrop för båda lägena.
+    har_matcher = c.execute("SELECT 1 FROM matches WHERE player_id=? LIMIT 1",
+                            (pid,)).fetchone()
+    dagar = (int((time.time() - gammal[1]) // 86400) + 3
+             if har_matcher and gammal and gammal[1] else None)
+    rader = [(pid, m["match_id"], m["start_time"], int(vann(m)), m.get("hero_id"),
+              m.get("kills"), m.get("deaths"), m.get("assists"), m["game_mode"],
+              m.get("average_rank"))
+             for m in hämta_alla_matcher(pid, [v[0] for v in LÄGEN.values()], dagar)
+             if giltig(m)]
+    if not rader and not har_matcher:
         raise inga_matcher_fel(pid, " or ".join(n for _, n, _ in LÄGEN.values()))
     uppdatera_hjältar(c)
 
-    # Namnet är bara kosmetika: går det inte att hämta behåller vi det gamla.
-    try:
-        namn, rank = hämta_profil(pid)
-    except ApiFel:
-        namn, rank = None, None
+    # Namn och rank hämtas högst en gång per dygn. Namnet är bara kosmetika: går det inte
+    # att hämta behåller vi det gamla.
+    namn, rank = None, None
+    senast = c.execute("SELECT profile_fetched FROM players WHERE id=?", (pid,)).fetchone()
+    if not senast or not senast[0] or time.time() - senast[0] > PROFIL_ÅLDER:
+        try:
+            namn, rank = hämta_profil(pid)
+            profil_hämtad = True
+        except ApiFel:
+            profil_hämtad = False
+    else:
+        profil_hämtad = False
     namn = namn or (gammal[0] if gammal else None) or str(pid)
 
     före = c.execute("SELECT COUNT(*) FROM matches WHERE player_id=?", (pid,)).fetchone()[0]
@@ -365,6 +382,8 @@ def uppdatera_spelare(c, pid):
               (pid, namn, int(time.time())))
     if rank is not None:        # behåll den gamla ranken om OpenDota inte svarar med någon
         c.execute("UPDATE players SET rank_tier=? WHERE id=?", (rank, pid))
+    if profil_hämtad:
+        c.execute("UPDATE players SET profile_fetched=? WHERE id=?", (int(time.time()), pid))
     c.commit()
     efter = c.execute("SELECT COUNT(*) FROM matches WHERE player_id=?", (pid,)).fetchone()[0]
     return efter - före
@@ -471,7 +490,14 @@ def läs_session(c, kakrad):
 # ---------- automatisk uppdatering i bakgrunden ----------
 _lås = threading.Lock()
 _kö = []                    # spelar-id som väntar på uppdatering
-_tillstånd = {"arbetar": False, "vila_till": 0, "dag": "", "anrop": 0}
+_tillstånd = {"arbetar": False, "vila_till": 0}
+
+
+def färsk_lista(antal):
+    """Hur gammal en anmäld spelares data får vara innan den hämtas om, när en topplista
+    öppnas. Med många spelare sprids dygnets anrop jämnt så att budgeten räcker hela
+    dygnet i stället för att ta slut på förmiddagen. 80 spelare ger ungefär 80 minuter."""
+    return max(FÄRSK_LISTA, int(antal * 1.1 * 86400 / DYGNSBUDGET))
 
 
 def väntar():
@@ -502,14 +528,11 @@ def _arbeta():
         with closing(db()) as c:            # egen databasanslutning för tråden
             while True:
                 with _lås:
-                    dag = time.strftime("%Y-%m-%d", time.gmtime())
-                    if _tillstånd["dag"] != dag:            # nytt dygn, ny budget
-                        _tillstånd.update(dag=dag, anrop=0)
-                    if not _kö or _tillstånd["anrop"] + ANROP_PER_SPELARE > DYGNSBUDGET:
+                    # Alla anrop i dag räknas, även knapptryck och inloggningar.
+                    if not _kö or anrop_idag() + ANROP_PER_SPELARE > DYGNSBUDGET:
                         _kö.clear()
                         return
                     pid = _kö[0]
-                    _tillstånd["anrop"] += ANROP_PER_SPELARE
                 try:
                     uppdatera_spelare(c, pid)
                     fel = False
@@ -2149,12 +2172,12 @@ class Handler(BaseHTTPRequestHandler):
             if delar == ["login", "return"]:
                 return self._inloggning_klar(c, q)
             if not delar:
-                köa_uppdatering(c, anmälda(c), FÄRSK_LISTA)
+                köa_uppdatering(c, anmälda(c), färsk_lista(len(anmälda(c))))
                 return self._skicka(200, med_status(sida_meny(c)))
             läge, rest = delar[0], delar[1:]
             if läge == "pass":
                 if not rest:
-                    köa_uppdatering(c, pass_anmälda(c), FÄRSK_LISTA)
+                    köa_uppdatering(c, pass_anmälda(c), färsk_lista(len(anmälda(c))))
                     return self._skicka(200, med_status(sida_pass(c, månad)))
                 if len(rest) == 2 and rest[0] == "player" and rest[1].isdigit():
                     s = sida_pass_spelare(c, int(rest[1]), månad)
@@ -2163,7 +2186,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self._skicka(200, med_status(s))
             if läge in LÄGEN:
                 if not rest:
-                    köa_uppdatering(c, anmälda(c, läge), FÄRSK_LISTA)
+                    köa_uppdatering(c, anmälda(c, läge), färsk_lista(len(anmälda(c))))
                     return self._skicka(200, med_status(sida_hem(c, månad, läge)))
                 if (len(rest) == 4 and rest[0] == "player" and rest[2] == "match"
                         and rest[1].isdigit() and rest[3].isdigit()):
