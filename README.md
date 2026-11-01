@@ -12,6 +12,8 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
 
 ## Så fungerar det
 
+- **Single Draft är dold under betan** (`TURBO_HIDDEN_MODES=sd`). Sätt variabeln till ett tomt
+  värde för att visa den igen.
 - **Två stegar** med egen topplista, profil och MMR. En spelare kan vara med i båda.
 - **Ny säsong varje månad:** alla börjar om på 1500 MMR den 1:a (UTC).
 - **MMR** utgår från vinst eller förlust (omkring 12 per match) och justeras lite för
@@ -60,6 +62,7 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
 | `TURBO_HOST` | `127.0.0.1` lokalt, `0.0.0.0` på nätet | Vilket nätverkskort sajten lyssnar på |
 | `TURBO_PORT` | `8000` | Porten sajten lyssnar på. Saknas den används `PORT`, som värdtjänster brukar sätta |
 | `TURBO_MAX_PLAYERS` | `80` | Max antal spelare i betan. `0` tar bort taket |
+| `TURBO_HIDDEN_MODES` | `sd` | Dolda stegar, t.ex. `sd`. Tomt värde visar alla. Dolda lägens matcher sparas ändå, men syns inte och ger ingen pass-XP |
 | `TURBO_DB` | `turbo.db` bredvid koden, eller på Railways volym | Sökväg till databasfilen, t.ex. på en disk som sparas mellan omstarter |
 
 När `TURBO_URL` inte är localhost stängs testformuläret "track a player by ID" av.
