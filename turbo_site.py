@@ -97,6 +97,17 @@ XP_FÖRLUST = 40             # XP per förlorad match
 NIVÅ_XP = 500               # XP per nivå
 PASS_UPPDRAG = 8            # antal uppdrag per månad (det utvalda + sju slumpade)
 PASS_UTVALDA = 3            # antal utvalda hjältar per månad
+# Veckouppdrag: VECKO_ANTAL nya uppdrag varje måndag 00:00 UTC. Texten lånas från UPPDRAG.
+# Bara matcher under veckan (och inom månaden) räknas. Veckor som delas mellan två månader
+# räknas för sig i varje månad, eftersom passet nollställs den 1:a.
+# Veckouppdragen räknas inte in i "alla uppdrag" för Champion track.
+VECKO_ANTAL = 4
+VECKO_UPPDRAG = {           # nyckel -> (XP, möjliga mål)
+    "utvald": (300, (1, 1, 2)), "spela": (200, (6, 8, 10)), "turbo": (200, (3, 4, 5)),
+    "sd": (250, (1, 2, 2)), "kills": (200, (12, 14, 16)), "assists": (200, (15, 18, 20)),
+    "rena": (250, (1, 2, 2)), "hjältar": (250, (3, 4, 5)), "svit": (250, (2, 3, 3)),
+    "guld": (250, (1, 1, 2)), "kda": (200, (1, 2, 3)),
+}
 # Uppdrag: nyckel -> (XP, möjliga mål, text). Vilka uppdrag och mål en månad får slumpas
 # med månaden som frö, så alla får samma uppdrag och de ändras inte under månaden.
 # Ändras listan här ändras också innevarande månads uppdrag.
@@ -658,6 +669,31 @@ def pass_hjältar(c, månad):
     return valda
 
 
+def pass_veckor(månad):
+    """Veckorna som överlappar månaden: [(veckans måndag, start, slut)], där start och
+    slut är beskurna till månaden. Måndagen används som frö för veckans uppdrag."""
+    start, slut = månadsgränser(månad)
+    måndag = start - time.gmtime(start).tm_wday * 86400
+    ut = []
+    while måndag < slut:
+        ut.append((måndag, max(måndag, start), min(måndag + 7 * 86400, slut)))
+        måndag += 7 * 86400
+    # En stump på under tre dagar i början eller slutet av månaden slås ihop med
+    # grannveckan, så att ingen vecka blir för kort för sina uppdrag.
+    if len(ut) > 1 and ut[0][2] - ut[0][1] < 3 * 86400:
+        ut[:2] = [(ut[1][0], ut[0][1], ut[1][2])]
+    if len(ut) > 1 and ut[-1][2] - ut[-1][1] < 3 * 86400:
+        ut[-2:] = [(ut[-2][0], ut[-2][1], ut[-1][2])]
+    return ut
+
+
+def vecko_uppdrag(måndag):
+    """Veckans uppdrag, samma för alla. Fröet är veckans måndag (UTC)."""
+    rng = random.Random("vecka-" + time.strftime("%Y-%m-%d", time.gmtime(måndag)))
+    return [{"typ": k, "n": rng.choice(VECKO_UPPDRAG[k][1]), "xp": VECKO_UPPDRAG[k][0]}
+            for k in rng.sample(list(VECKO_UPPDRAG), VECKO_ANTAL)]
+
+
 def pass_uppdrag(månad):
     """Månadens uppdrag: det utvalda först, sedan sju slumpade. Samma för alla."""
     rng = random.Random(f"uppdrag-{månad}")
@@ -715,11 +751,22 @@ def pass_status(c, pid, månad):
     for u in pass_uppdrag(månad):
         f = framsteg(u["typ"], ms, utvalda)
         uppdrag.append({**u, "framsteg": min(f, u["n"]), "klar": f >= u["n"]})
+    veckor = []
+    for måndag, a, b in pass_veckor(månad):
+        veckans = [m for m in ms if a <= m["tid"] < b]
+        lista = []
+        for u in vecko_uppdrag(måndag):
+            f = framsteg(u["typ"], veckans, utvalda)
+            lista.append({**u, "framsteg": min(f, u["n"]), "klar": f >= u["n"]})
+        veckor.append({"måndag": måndag, "start": a, "slut": b, "uppdrag": lista,
+                       "nu": a <= time.time() < b})
     match_xp = sum(XP_VINST if m["win"] else XP_FÖRLUST for m in ms)
     uppdrag_xp = sum(u["xp"] for u in uppdrag if u["klar"])
-    xp = match_xp + uppdrag_xp
+    vecko_xp = sum(u["xp"] for v in veckor for u in v["uppdrag"] if u["klar"])
+    xp = match_xp + uppdrag_xp + vecko_xp
     klara = sum(u["klar"] for u in uppdrag)
     return {"xp": xp, "nivå": xp // NIVÅ_XP, "match_xp": match_xp, "uppdrag_xp": uppdrag_xp,
+            "vecko_xp": vecko_xp, "veckor": veckor,
             "uppdrag": uppdrag, "klara": klara, "n": len(ms),
             "v": sum(m["win"] for m in ms), "mästare": klara == len(uppdrag)}
 
@@ -1062,6 +1109,15 @@ background:linear-gradient(180deg,rgba(229,180,80,.12),#111b23 70%)}
 .stamp{position:absolute;right:12px;bottom:10px;font-size:11px;font-weight:800;
 letter-spacing:.12em;text-transform:uppercase;color:var(--gold);border:2px solid var(--gold);
 border-radius:4px;padding:0 6px;transform:rotate(-8deg);opacity:.9}
+/* veckouppdrag */
+.card.weekly{border-color:rgba(120,200,255,.35);
+background:linear-gradient(180deg,rgba(90,170,230,.10),var(--panel) 45%)}
+.card.weekly h2{display:flex;align-items:center;gap:10px}
+.wkcount{font-size:13px;font-weight:700;padding:2px 9px;border-radius:999px;
+background:rgba(159,212,232,.15);color:var(--link)}
+.wkcount.all{background:var(--radiant);color:#0b1a12}
+.reset{font-size:14px;font-weight:600;color:var(--link)}
+.chips.weeks{margin-top:6px}.chips.weeks span.all{border-color:var(--radiant);color:var(--radiant)}
 /* topplista */
 .whocell{display:inline-flex;align-items:center;gap:12px}
 .ttl{display:block;font-size:12px;color:#e6b8ff;font-style:italic}
@@ -1805,15 +1861,14 @@ def utvalda_html(c, månad):
             f"<div class='feats'>{kort}</div></section>")
 
 
-def uppdrag_html(månad, status=None):
-    """Månadens uppdrag som kort. Med status visas spelarens framsteg."""
-    lista = status["uppdrag"] if status else pass_uppdrag(månad)
+def uppdragskort(lista, med_framsteg):
+    """Uppdragskorten. med_framsteg = visa spelarens stapel och 'Complete'-stämpel."""
     kort = ""
     for u in lista:
         text = html.escape(UPPDRAG[u["typ"]][2].format(n=u["n"]))
-        klar = bool(status and u["klar"])
+        klar = bool(med_framsteg and u["klar"])
         framsteg = ""
-        if status:
+        if med_framsteg:
             procent = round(100 * u["framsteg"] / u["n"])
             framsteg = (f"<div class='qbar' role='progressbar' aria-valuemin='0' "
                         f"aria-valuemax='{u['n']}' aria-valuenow='{u['framsteg']}' "
@@ -1824,9 +1879,59 @@ def uppdrag_html(månad, status=None):
                  f"<div class='qtop'><span class='qt'>{text}</span>"
                  f"<span class='xp'>+{u['xp']} XP</span></div>{framsteg}</div>"
                  f"{'<span class=stamp>Complete</span>' if klar else ''}</div>")
-    return (f"<section class='card'><div class='head'><h2>Quests</h2><span class='dim'>"
-            f"+{XP_VINST} XP per win, +{XP_FÖRLUST} per loss on top</span></div>"
-            f"<div class='qgrid'>{kort}</div></section>")
+    return f"<div class='qgrid'>{kort}</div>"
+
+
+def tid_kvar(sekunder):
+    """'3 days' eller '5 hours' (minst 1 timme)."""
+    if sekunder >= 86400:
+        d = int(-(-sekunder // 86400))
+        return f"{d} day{'s' if d != 1 else ''}"
+    h = max(1, int(-(-sekunder // 3600)))
+    return f"{h} hour{'s' if h != 1 else ''}"
+
+
+def veckouppdrag_html(månad, status=None):
+    """Veckans uppdrag (innevarande månad) och en rad per tidigare vecka i månaden."""
+    veckor = status["veckor"] if status else [
+        {"måndag": m, "start": a, "slut": b, "uppdrag": vecko_uppdrag(m),
+         "nu": a <= time.time() < b} for m, a, b in pass_veckor(månad)]
+    nu = next((v for v in veckor if v["nu"]), None)
+    del_html = ""
+    if nu:
+        klara = sum(u.get("klar", False) for u in nu["uppdrag"]) if status else 0
+        räknare = (f"<span class='wkcount {'all' if klara == len(nu['uppdrag']) else ''}'>"
+                   f"{klara}/{len(nu['uppdrag'])} done</span>" if status else "")
+        del_html = (f"<div class='head'><h2>Weekly quests {räknare}</h2>"
+                    f"<span class='reset'>{ikon('turbo', 'ic sm')} New quests in "
+                    f"{tid_kvar(nu['slut'] - time.time())}</span></div>"
+                    f"{uppdragskort(nu['uppdrag'], bool(status))}")
+    tidigare = [v for v in veckor if v["slut"] <= time.time()]
+    if status and tidigare:
+        rader = ""
+        for v in tidigare:
+            klara = sum(u["klar"] for u in v["uppdrag"])
+            xp = sum(u["xp"] for u in v["uppdrag"] if u["klar"])
+            dag = time.gmtime(v["start"])
+            rader += (f"<span class='{'all' if klara == len(v['uppdrag']) else ''}'>"
+                      f"{MÅNADER[dag.tm_mon - 1][:3]} {dag.tm_mday}: <b>{klara}/"
+                      f"{len(v['uppdrag'])}</b> &middot; +{xp} XP</span>")
+        del_html += (f"<p class='note'>Earlier weeks this month</p>"
+                     f"<div class='chips weeks'>{rader}</div>")
+    if not del_html:
+        return ""
+    return f"<section class='card weekly'>{del_html}</section>"
+
+
+def uppdrag_html(månad, status=None):
+    """Veckans uppdrag och månadens uppdrag som kort. Med status visas framstegen."""
+    lista = status["uppdrag"] if status else pass_uppdrag(månad)
+    return (veckouppdrag_html(månad, status) +
+            f"<section class='card'><div class='head'><h2>Monthly quests</h2><span class='dim'>"
+            f"Complete all {len(lista)} to unlock the Champion track</span></div>"
+            f"{uppdragskort(lista, bool(status))}"
+            f"<p class='note'>Every match also gives XP: +{XP_VINST} for a win, "
+            f"+{XP_FÖRLUST} for a loss.</p></section>")
 
 
 def pass_knapp(c, pid):

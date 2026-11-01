@@ -28,7 +28,10 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
   märken (brons, silver, guld, mythic) bredvid namnet på stegarna, titlar på
   passprofilen och ett lysande namn från nivå 25. Sidan har en banner med nivåemblem,
   en vågrät belöningsbana med 30 nivåer, uppdragskort och stora porträtt av de utvalda
-  hjältarna. **Champion track:** klarar man alla åtta uppdrag låses en andra, guldig rad upp på
+  hjältarna. **Veckouppdrag:** fyra nya uppdrag varje måndag 00:00 UTC (200–300 XP styck), samma
+  för alla. Bara veckans matcher räknas. Korta veckostumpar i början eller slutet av en månad
+  slås ihop med grannveckan. Veckouppdragen krävs inte för Champion track.
+  **Champion track:** klarar man alla åtta uppdrag låses en andra, guldig rad upp på
   belöningsbanan (krona på stegarna, roterande guldram runt emblemet, titlar och ett skimrande
   märke). **Nivå-upp-animation** visas när man öppnar sitt pass efter att ha gått upp i nivå.
   Mest XP vid månadens slut vinner ett pris. Allt räknas om från matcherna,
