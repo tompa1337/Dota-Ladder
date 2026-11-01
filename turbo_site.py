@@ -1,5 +1,5 @@
 """
-Rankade stegar för Dota 2: Turbo och Single Draft (prototyp 4).
+Rankade stegar för Dota 2: Turbo och Single Draft (prototyp 4). Single Draft kan döljas.
 
 Starta:   dubbelklicka på starta.bat (Windows)   eller   python3 turbo_site.py (Mac)
 Öppna:    http://localhost:8000
@@ -88,8 +88,15 @@ SAJTNAMN = "Ranked Ladders"
 # miljövariabeln TURBO_MAX_PLAYERS (0 = inget tak).
 MAX_SPELARE = int(os.environ.get("TURBO_MAX_PLAYERS") or "80")
 # Spellägen: adressdel -> (OpenDotas game_mode, namn, kort beskrivning på menyn)
-LÄGEN = {"turbo": (TURBO, "Turbo", "Fast games, quick gold and experience."),
-         "sd": (SINGLE_DRAFT, "Single Draft", "Pick from four random heroes.")}
+ALLA_LÄGEN = {"turbo": (TURBO, "Turbo", "Fast games, quick gold and experience."),
+              "sd": (SINGLE_DRAFT, "Single Draft", "Pick from four random heroes.")}
+# Dolda lägen syns inte på sajten och räknas inte i passet, men deras matcher hämtas och
+# sparas ändå, så att inget saknas när läget slås på igen. Styrs med TURBO_HIDDEN_MODES,
+# t.ex. "sd" (standard just nu) eller "" för att visa alla lägen.
+DOLDA_LÄGEN = {k.strip() for k in os.environ.get("TURBO_HIDDEN_MODES", "sd").split(",")
+               if k.strip() in ALLA_LÄGEN and k.strip() != "turbo"}
+LÄGEN = {k: v for k, v in ALLA_LÄGEN.items() if k not in DOLDA_LÄGEN}
+LÄGESTEXT = " and ".join(v[1] for v in LÄGEN.values())     # "Turbo" eller "Turbo and Single Draft"
 BILDER = "https://cdn.cloudflare.steamstatic.com"   # här ligger Dotas hjältebilder
 HJÄLTE_ÅLDER = 7 * 24 * 3600   # hämta om hjältelistan en gång i veckan (nya hjältar)
 # ---------- Ladder Pass (ett gratis månadspass, likt Dotas gamla Battle Pass) ----------
@@ -309,7 +316,7 @@ def hjälte_html(hj, hero_id, med_namn=True):
 
 
 def lägesnyckel(game_mode):
-    return next(k for k, v in LÄGEN.items() if v[0] == game_mode)
+    return next(k for k, v in ALLA_LÄGEN.items() if v[0] == game_mode)
 
 
 def anmälan(c, pid, månad, läge):
@@ -351,10 +358,10 @@ def uppdatera_spelare(c, pid):
     rader = [(pid, m["match_id"], m["start_time"], int(vann(m)), m.get("hero_id"),
               m.get("kills"), m.get("deaths"), m.get("assists"), m["game_mode"],
               m.get("average_rank"))
-             for m in hämta_alla_matcher(pid, [v[0] for v in LÄGEN.values()], dagar)
+             for m in hämta_alla_matcher(pid, [v[0] for v in ALLA_LÄGEN.values()], dagar)
              if giltig(m)]
     if not rader and not har_matcher:
-        raise inga_matcher_fel(pid, " or ".join(n for _, n, _ in LÄGEN.values()))
+        raise inga_matcher_fel(pid, " or ".join(n for _, n, _ in ALLA_LÄGEN.values()))
     uppdatera_hjältar(c)
 
     # Namn och rank hämtas högst en gång per dygn. Namnet är bara kosmetika: går det inte
@@ -704,6 +711,12 @@ def pass_hjältar(c, månad):
     c.execute("INSERT OR IGNORE INTO pass_heroes VALUES(?,?)", (månad, json.dumps(valda)))
     c.commit()
     return valda
+
+
+# Uppdrag som hör till ett dolt spelläge ("sd") används inte.
+for _dolt in DOLDA_LÄGEN:
+    UPPDRAG.pop(_dolt, None)
+    VECKO_UPPDRAG.pop(_dolt, None)
 
 
 def pass_veckor(månad):
@@ -1146,6 +1159,10 @@ background:linear-gradient(180deg,rgba(229,180,80,.12),#111b23 70%)}
 .stamp{position:absolute;right:12px;bottom:10px;font-size:11px;font-weight:800;
 letter-spacing:.12em;text-transform:uppercase;color:var(--gold);border:2px solid var(--gold);
 border-radius:4px;padding:0 6px;transform:rotate(-8deg);opacity:.9}
+/* två rutor på startsidan när ett läge är dolt */
+.tiles.n2{grid-template-columns:repeat(2,minmax(0,1fr))}.tiles.n2 .tile{aspect-ratio:16/10}
+@media(max-width:560px){.tiles.n2{grid-template-columns:1fr}
+.tiles.n2 .tile{aspect-ratio:auto;min-height:170px}}
 /* stängd beta */
 .beta{margin:6px 0 18px;padding:14px 18px;border-radius:10px;border:1px solid rgba(229,180,80,.5);
 background:linear-gradient(100deg,rgba(229,180,80,.16),var(--panel) 65%)}
@@ -1302,12 +1319,12 @@ def sida_meny(c):
                 f"<span class='what'>Free monthly pass: quests, levels and badges.</span>"
                 f"<span class='count'>{spelare}</span></a>")
     return sida(SAJTNAMN, f"""
-<h1>Choose a ladder</h1>
+<h1>{'Choose a ladder' if len(LÄGEN) > 1 else 'Ranked Turbo, every month'}</h1>
 {beta_html(c) if not inloggad() else ''}
 <p class='sub'>Monthly Dota 2 ladders. Everyone starts at {START} MMR on the 1st of every
-month, and you can join both ladders. The {PASS_NAMN} gives XP for every match in
-either ladder.</p>
-<div class='tiles'>{knappar}</div>""")
+month{', and you can join every ladder' if len(LÄGEN) > 1 else ''}. The {PASS_NAMN}
+gives XP for every {LÄGESTEXT} match.</p>
+<div class='tiles n{len(LÄGEN) + 1}'>{knappar}</div>""")
 
 
 def platser_kvar(c):
@@ -1434,7 +1451,7 @@ def sida_hem(c, månad, läge, fel=""):
                   f"</a></p>{ruta(fel, 'err')}<p class='note'>You sign in on Steam's own "
                   f"site. This site never sees your password and only learns your Steam ID. "
                   f"Turn on \"Expose Public Match Data\" in Dota first, then join the ladder "
-                  f"from your profile. You can join both ladders.</p></div>")
+                  f"from your profile.</p></div>")
     if LOKALT:      # bara när sajten körs på den egna datorn: lägg till vem som helst för test
         anslut += (f"<div class='card'><h2>Local testing: track a player by ID</h2>"
                    f"<form class='row' method='post' action='/{läge}/add'>"
@@ -1527,9 +1544,9 @@ def sida_spelare(c, pid, månad, läge, fel="", info=""):
     # Anmälan gäller alltid innevarande månad, även när en äldre månad visas.
     nu = anmälan(c, pid, nu_månad(), läge)
     denna = månadsnamn(nu_månad())
-    annat = next(k for k in LÄGEN if k != läge)
+    annat = next((k for k in LÄGEN if k != läge), None)    # None om bara ett läge visas
     även = (f" Also in the <a href='/{annat}/player/{pid}'>{LÄGEN[annat][1]}</a> ladder."
-            if anmälan(c, pid, nu_månad(), annat) else "")
+            if annat and anmälan(c, pid, nu_månad(), annat) else "")
     post = f"<form class='row' method='post' action='/{läge}/list/{pid}'>"
     if nu:
         lista = (f"{post}<input type='hidden' name='listed' value='0'><span class='ok'>"
@@ -1806,7 +1823,7 @@ def banner_html(månad, s=None, namn=None, knapp="", fel=""):
     if s is None:           # inte inloggad: visa passet utan egen nivå
         return (f"<section class='bp-hero'><div class='bp-art'>{emblem_html(0, 'big')}</div>"
                 f"<div class='bp-main'>{säsong}<h1 class='bp-title'>{PASS_NAMN}</h1>"
-                f"<p class='bp-lead'>Free for everyone. Every Turbo and Single Draft match "
+                f"<p class='bp-lead'>Free for everyone. Every {LÄGESTEXT} match "
                 f"gives XP, quests give more, and every level unlocks something.</p>"
                 f"<a class='cta' href='/login?next=/pass'>Sign in through Steam to start</a>"
                 f"{ruta(fel, 'err')}<p class='note'>Turn on \"Expose Public Match Data\" in "
