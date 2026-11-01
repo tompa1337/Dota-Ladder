@@ -82,6 +82,10 @@ PRIS_BILD = ("https://community.cloudflare.steamstatic.com/economy/image/"
              "GJG51EejH-LGxsuyIGmS2llzy4Px613YUxjylZnu9CxcoaX8PadodKSQXT6U"
              "mLsi4uM5TXjlkR9ytm3Xmdz6di_CPAIjW5t5TO4U8k7vczduM-k/256fx256f")
 SAJTNAMN = "Ranked Ladders"
+# Stängd beta: högst så många spelare kan logga in. Spelare som redan har en plats kommer
+# alltid in. Den som loggar in när det är fullt hamnar på väntelistan. Ändras med
+# miljövariabeln TURBO_MAX_PLAYERS (0 = inget tak).
+MAX_SPELARE = int(os.environ.get("TURBO_MAX_PLAYERS") or "80")
 # Spellägen: adressdel -> (OpenDotas game_mode, namn, kort beskrivning på menyn)
 LÄGEN = {"turbo": (TURBO, "Turbo", "Fast games, quick gold and experience."),
          "sd": (SINGLE_DRAFT, "Single Draft", "Pick from four random heroes.")}
@@ -248,6 +252,16 @@ def db():
     if "listed" not in [r[1] for r in c.execute("PRAGMA table_info(players)")]:
         c.execute("ALTER TABLE players ADD COLUMN listed INTEGER NOT NULL DEFAULT 0")
         c.commit()
+    # members = spelare med en plats i betan, waitlist = de som försökte när det var fullt.
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE name='members'").fetchone():
+        c.execute("CREATE TABLE members(player_id INTEGER PRIMARY KEY, joined INTEGER)")
+        # Första gången: alla som redan har loggat in (anmält sig eller har en inloggning)
+        # får behålla sin plats.
+        c.execute("INSERT OR IGNORE INTO members SELECT player_id, strftime('%s','now') FROM "
+                  "(SELECT player_id FROM entries UNION SELECT player_id FROM sessions)")
+        c.commit()
+    c.execute("CREATE TABLE IF NOT EXISTS waitlist(player_id INTEGER PRIMARY KEY, "
+              "joined INTEGER)")
     return c
 
 
@@ -1109,6 +1123,14 @@ background:linear-gradient(180deg,rgba(229,180,80,.12),#111b23 70%)}
 .stamp{position:absolute;right:12px;bottom:10px;font-size:11px;font-weight:800;
 letter-spacing:.12em;text-transform:uppercase;color:var(--gold);border:2px solid var(--gold);
 border-radius:4px;padding:0 6px;transform:rotate(-8deg);opacity:.9}
+/* stängd beta */
+.beta{margin:6px 0 18px;padding:14px 18px;border-radius:10px;border:1px solid rgba(229,180,80,.5);
+background:linear-gradient(100deg,rgba(229,180,80,.16),var(--panel) 65%)}
+.beta p{margin:6px 0 0}
+.betatag{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+padding:2px 9px;border-radius:4px;background:var(--gold);color:#1a1405}
+.betabar{height:8px;margin-top:10px;border-radius:4px;background:#0a0f14;overflow:hidden}
+.betabar i{display:block;height:100%;background:linear-gradient(90deg,#e0a83a,#ffe08a)}
 /* veckouppdrag */
 .card.weekly{border-color:rgba(120,200,255,.35);
 background:linear-gradient(180deg,rgba(90,170,230,.10),var(--panel) 45%)}
@@ -1258,10 +1280,63 @@ def sida_meny(c):
                 f"<span class='count'>{spelare}</span></a>")
     return sida(SAJTNAMN, f"""
 <h1>Choose a ladder</h1>
+{beta_html(c) if not inloggad() else ''}
 <p class='sub'>Monthly Dota 2 ladders. Everyone starts at {START} MMR on the 1st of every
 month, and you can join both ladders. The {PASS_NAMN} gives XP for every match in
 either ladder.</p>
 <div class='tiles'>{knappar}</div>""")
+
+
+def platser_kvar(c):
+    """Lediga platser i betan, eller None om det inte finns något tak."""
+    if not MAX_SPELARE:
+        return None
+    return max(0, MAX_SPELARE - c.execute("SELECT COUNT(*) FROM members").fetchone()[0])
+
+
+def ge_plats(c, pid):
+    """True om spelaren har (eller nu fick) en plats. Annars hamnar hen på väntelistan."""
+    if c.execute("SELECT 1 FROM members WHERE player_id=?", (pid,)).fetchone():
+        return True
+    if MAX_SPELARE and platser_kvar(c) == 0:
+        c.execute("INSERT OR IGNORE INTO waitlist VALUES(?,?)", (pid, int(time.time())))
+        c.commit()
+        return False
+    c.execute("INSERT OR IGNORE INTO members VALUES(?,?)", (pid, int(time.time())))
+    c.execute("DELETE FROM waitlist WHERE player_id=?", (pid,))
+    c.commit()
+    return True
+
+
+def beta_html(c):
+    """Rutan om den stängda betan på startsidan."""
+    kvar = platser_kvar(c)
+    if kvar is None:
+        return ""
+    if kvar:
+        text = (f"<b>{kvar} of {MAX_SPELARE} spots left.</b> Sign in through Steam to grab "
+                f"one. Once you are in, your spot is yours.")
+    else:
+        text = ("<b>All spots are taken.</b> Sign in through Steam anyway to join the waitlist; "
+                "we let more players in as the beta grows.")
+    fyllt = round(100 * (MAX_SPELARE - kvar) / MAX_SPELARE)
+    return (f"<div class='beta'><span class='betatag'>Closed beta</span><p>{text}</p>"
+            f"<div class='betabar' role='progressbar' aria-valuemin='0' "
+            f"aria-valuemax='{MAX_SPELARE}' aria-valuenow='{MAX_SPELARE - kvar}' "
+            f"aria-label='Beta spots taken'><i style='width:{fyllt}%'></i></div></div>")
+
+
+def sida_väntelista(c, pid):
+    """Sidan för den som loggade in när betan var full."""
+    plats = c.execute("SELECT COUNT(*) FROM waitlist WHERE joined <= (SELECT joined FROM "
+                      "waitlist WHERE player_id=?)", (pid,)).fetchone()[0]
+    return sida("Waitlist", f"""
+<h1>The beta is full</h1>
+<p class='sub'>All {MAX_SPELARE} spots in the closed beta are taken. You are on the waitlist
+as number <b>{plats}</b>.</p>
+<div class='card'><p>When more spots open, sign in through Steam again and you will get in
+automatically. Until then you can still look at the ladders and the
+<a href='/pass'>{PASS_NAMN}</a>.</p></div>""")
 
 
 def ruta(text, klass):
@@ -2116,6 +2191,8 @@ class Handler(BaseHTTPRequestHandler):
             pid = kontrollera_steam(q)
         except ApiFel as e:
             return self._skicka(200, sida_hem(c, nu_månad(), läge, str(e)))
+        if not ge_plats(c, pid):            # betan är full: väntelistan, ingen inloggning
+            return self._skicka(200, sida_väntelista(c, pid))
         _begäran.pid = pid
         kakor = {"Set-Cookie": kaka(skapa_session(c, pid), SESSION_DAGAR * 86400)}
         try:                # hämta spelarens matcher direkt, så att profilen finns
