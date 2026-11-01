@@ -1691,15 +1691,22 @@ def sida_match(c, pid, mid, läge):
         mot_steg = ("Opponent level", str(e["motståndare"]),
                     f"The lobby averaged {rank_namn(e['lobby'])}, {jämfört} your own rank "
                     f"({rank_namn(e['egen'])}). {START} is a lobby at your level.")
-    steg = [("MMR before the match", en(e["före"]), före_text),
-            mot_steg,
-            ("Expected win chance", f"{chans}%",
-             f"Your MMR against the opponent level gives {en(100 * e['rå'], 0)}%. Only "
-             f"{en(100 * FÖRVÄNTAN_VIKT, 0)}% of its distance from 50% is counted, so it "
-             f"nudges the result without deciding it."),
-            (f"Base change for a {ord_.lower()}", en(e["grund"]),
-             (f"{K} × (100% − {chans}%). An unexpected win gives more."
-              if w else f"−{K} × {chans}%. An expected loss costs less."))]
+    if FÖRVÄNTAN_VIKT:          # vinstchansen räknas in: visa motstånd och chans
+        steg = [("MMR before the match", en(e["före"]), före_text),
+                mot_steg,
+                ("Expected win chance", f"{chans}%",
+                 f"Your MMR against the opponent level gives {en(100 * e['rå'], 0)}%. Only "
+                 f"{en(100 * FÖRVÄNTAN_VIKT, 0)}% of its distance from 50% is counted, so it "
+                 f"nudges the result without deciding it."),
+                (f"Base change for a {ord_.lower()}", en(e["grund"]),
+                 (f"{K} × (100% − {chans}%). An unexpected win gives more."
+                  if w else f"−{K} × {chans}%. An expected loss costs less."))]
+    else:                       # alla matcher räknas som jämna
+        steg = [("MMR before the match", en(e["före"]), före_text),
+                (f"Base change for a {ord_.lower()}", en(e["grund"]),
+                 f"Every match counts as an even match, so a {ord_.lower()} is worth "
+                 f"{'+' if w else '−'}{en(K / 2, 0)} before the K/D/A adjustment. Who you "
+                 f"were matched with, on either team, does not change it.")]
     if e["kda"] is None:
         steg.append(("K/D/A", "missing", "OpenDota has no numbers for this match, "
                      "so it is counted without adjustment."))

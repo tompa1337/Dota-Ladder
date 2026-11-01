@@ -29,7 +29,9 @@ START = 1500        # startpoäng
 K = 24              # hur snabbt poängen rör sig per match
 # Hur mycket den förväntade vinstchansen får påverka. 1 = vanlig Elo, 0 = inte alls.
 # Med 0.1 räknas 31 % som 48,1 % (en tiondel av avståndet från 50 %).
-FÖRVÄNTAN_VIKT = 0.1
+# 0 = varje match räknas som jämn (50 %). Lobbyns snittrank innehåller även ens egna
+# lagkamrater, så dåliga lagkamrater fick matchen att se lättare ut. Därför används den inte.
+FÖRVÄNTAN_VIKT = 0
 ASSIST_VIKT = 1 / 3  # en assist är värd en tredjedels kill
 KDA_NORMAL = 2.0    # (kills + assists/3) / deaths som räknas som en "vanlig" match
 KDA_MAX = 0.50      # K/D/A kan som mest ändra en matchs poäng med 50 %
