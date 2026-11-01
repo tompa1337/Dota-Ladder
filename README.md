@@ -21,6 +21,21 @@ Månadsvisa rankingstegar för Dota 2 **Turbo** och **Single Draft**. Matcherna 
   Två förluster med samma guldhjälte gör att den hoppas över och nästa hjälte blir guldhjälte.
   Spelaren kan också välja om sin guldhjälte: man börjar månaden med ett omval och får ett nytt
   efter 5 Turbo-matcher med samma guldhjälte. Högst ett omval åt gången.
+- **Ladder Pass:** ett gratis månadspass, likt Dotas gamla Battle Pass, med en egen ruta
+  på startsidan (`/pass`). Varje match i båda stegarna ger XP (+100 vinst, +40 förlust),
+  och åtta månadsuppdrag ger mer (300–500 XP). Varje uppdrag slumpas fram per månad och är
+  samma för alla, och tre utvalda hjältar väljs varje månad. 500 XP per nivå. Belöningar:
+  märken (brons, silver, guld, mythic) bredvid namnet på stegarna, titlar på
+  passprofilen och ett lysande namn från nivå 25. Sidan har en banner med nivåemblem,
+  en vågrät belöningsbana med 30 nivåer, uppdragskort och stora porträtt av de utvalda
+  hjältarna. **Veckouppdrag:** fyra nya uppdrag varje måndag 00:00 UTC (200–300 XP styck), samma
+  för alla. Bara veckans matcher räknas. Korta veckostumpar i början eller slutet av en månad
+  slås ihop med grannveckan. Veckouppdragen krävs inte för Champion track.
+  **Champion track:** klarar man alla åtta uppdrag låses en andra, guldig rad upp på
+  belöningsbanan (krona på stegarna, roterande guldram runt emblemet, titlar och ett skimrande
+  märke). **Nivå-upp-animation** visas när man öppnar sitt pass efter att ha gått upp i nivå.
+  Mest XP vid månadens slut vinner ett pris. Allt räknas om från matcherna,
+  bara anmälan sparas. Uppdrag, XP och belöningar ändras i början av `turbo_site.py`.
 - **Inloggning med Steam:** spelaren loggar in på Steams egen sida. Sajten ser aldrig
   lösenordet. Bara inloggad spelare kan anmäla sig själv till en stege.
 - **Automatisk uppdatering:** nya matcher hämtas i bakgrunden när någon öppnar en sida.
